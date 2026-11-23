@@ -10,7 +10,9 @@ import { classifyTextProbabilistically } from './classifier';
 import { compareTexts, buildStylometricProfiles, compareProfilesSimilarity } from './comparison';
 import {
   computeContentHash,
+  parseCsvRows,
   parseImportedDatasetText,
+  processCsvFileBatch,
   validateSampleQuality,
   buildSampleFromImport,
 } from './validation';
@@ -23,6 +25,16 @@ import {
 } from './demoCorpus';
 import { runControlledTrainingExperiment } from './training';
 import { buildDashboard30DayTrends } from './dashboardTrends';
+import {
+  computeDatabaseLayerSummary,
+  filterAuditEvents,
+  SYSTEM_RESPONSIBILITY_MATRIX,
+} from './adminGovernance';
+import {
+  computeJobProgress,
+  createImportCollectionJob,
+  summarizeCollectionJobs,
+} from './collectionJobs';
 
 test('linguistic engine detects English and Arabic RTL dialects accurately', () => {
   const en = detectLanguageAndDialect('Archival digitization preserves maritime correspondence.');
@@ -121,6 +133,46 @@ test('dataset parser supports CSV, JSON, JSONL, and XML imports', () => {
   assert.equal(built.validation.verified, false);
 });
 
+test('CSV batch parser handles UTF-8 BOM, multi-line quoted cells, custom column overrides, and cross-file duplicate quarantine', () => {
+  const bomCsv =
+    '\uFEFFcustom_body,source_tag,lang_code\r\n"Line one of ""quoted"" observational prose,\r\nline two across paragraphs.",human,en\r\n"Distinct second human passage about coastal cartography and tidal instrumentation.",human,en';
+  const rows = parseCsvRows(bomCsv);
+  assert.equal(rows.length, 3);
+  assert.equal(rows[0][0], 'custom_body');
+  assert.ok(rows[1][0].includes('"quoted"'));
+
+  const fileA = {
+    fileName: 'batch-a.csv',
+    content: bomCsv,
+  };
+  const fileB = {
+    fileName: 'batch-b.csv',
+    content:
+      'custom_body,source_tag,lang_code\n"Distinct second human passage about coastal cartography and tidal instrumentation.",human,en\n"Automated synthetic telemetry summary generated for stylometric divergence inspection.",ai,en',
+  };
+
+  const batchResult = processCsvFileBatch([fileA, fileB], DEMO_SAMPLES, {
+    datasetName: 'Multi-File Coastal Study',
+    license: 'CC-BY-4.0',
+    isSyntheticDemo: false,
+    columnOverrides: {
+      text: 'custom_body',
+      origin_class: 'source_tag',
+      language: 'lang_code',
+    },
+    idSeed: 'TST1',
+  });
+
+  assert.equal(batchResult.errors.length, 0);
+  assert.equal(batchResult.fileSummaries.length, 2);
+  assert.equal(batchResult.builtSamples.length, 4);
+  assert.equal(batchResult.quarantinedCount, 1);
+  assert.equal(batchResult.fileSummaries[1].quarantinedCount, 1);
+  assert.equal(batchResult.dataset.layer, 'raw');
+  assert.equal(batchResult.dataset.source_type, 'csv_batch_drop');
+  assert.ok(batchResult.builtSamples.every((s) => s.layer === 'raw'));
+});
+
 test('comparison & stylometry profile engines compute deterministic diffs and similarities', () => {
   const cmp = compareTexts(DEMO_SAMPLES[0].text, DEMO_SAMPLES[1].text);
   assert.ok(cmp.diff_segments.length > 0);
@@ -199,3 +251,454 @@ test('dashboard 30-day trends engine computes deterministic sparkline series fro
   assert.equal(lastActivity.value, INITIAL_EXPERIMENTS.length + INITIAL_PATTERNS.length);
   assert.ok(lastSamples.shortDate.length >= 4);
 });
+
+test('admin governance module summarizes database layers, responsibility matrix, and audit search', () => {
+  assert.ok(SYSTEM_RESPONSIBILITY_MATRIX.length >= 5);
+  assert.ok(SYSTEM_RESPONSIBILITY_MATRIX.every((r) => r.admin && r.researcher && r.reviewer && r.enforcementLayer));
+
+  const summary = computeDatabaseLayerSummary({
+    datasets: DEMO_DATASETS,
+    samples: DEMO_SAMPLES,
+    experiments: INITIAL_EXPERIMENTS,
+  });
+  assert.equal(summary.totalDatasets, DEMO_DATASETS.length);
+  assert.equal(summary.totalSamples, DEMO_SAMPLES.length);
+  assert.equal(
+    summary.rawCount + summary.processedCount + summary.approvedCount,
+    DEMO_SAMPLES.length
+  );
+
+  const sampleAudits = [
+    {
+      id: 'a1',
+      timestamp: '2026-11-23T10:00:00Z',
+      actor: 'admin@example.com',
+      action: 'ADMIN_UPDATE_ROLE',
+      target_type: 'user',
+      target_id: 'uid_99',
+      details: 'Promoted reviewer role.',
+    },
+    {
+      id: 'a2',
+      timestamp: '2026-11-23T11:00:00Z',
+      actor: 'local-researcher',
+      action: 'IMPORT_SAMPLES',
+      target_type: 'dataset',
+      target_id: 'csv-batch',
+      details: 'Imported CSV batch.',
+    },
+  ];
+  assert.equal(filterAuditEvents(sampleAudits, 'uid_99').length, 1);
+  assert.equal(filterAuditEvents(sampleAudits, '', 'IMPORT_SAMPLES').length, 1);
+});
+
+test('collectionJobs engine computes clamped progress percentages, summaries, and import job records', () => {
+  const idleJob = computeJobProgress({
+    job_key: 'j1',
+    source_key: 's1',
+    source_name: 'Idle Source',
+    collection_method: 'Fetch',
+    schedule_cron: '0 0 * * *',
+    expected_format: 'CSV',
+    execution_status: 'idle',
+    imported_records: 0,
+    failed_records: 0,
+    error_log: null,
+    last_execution: null,
+    next_execution: '2026-12-01T00:00:00Z',
+  });
+  assert.equal(idleJob.percent, 0);
+  assert.equal(idleJob.statusLabel, 'Idle');
+
+  const targetDerivedRunning = computeJobProgress({
+    job_key: 'j2',
+    source_key: 's2',
+    source_name: 'Active Scrape',
+    collection_method: 'API',
+    schedule_cron: 'manual',
+    expected_format: 'JSONL',
+    execution_status: 'running',
+    imported_records: 130,
+    failed_records: 20,
+    target_records: 200,
+    error_log: null,
+    last_execution: null,
+    next_execution: '2026-12-01T00:00:00Z',
+  });
+  assert.equal(targetDerivedRunning.percent, 75);
+  assert.equal(targetDerivedRunning.processedRecords, 150);
+  assert.equal(targetDerivedRunning.tone, 'running');
+
+  const clampedCompleted = computeJobProgress({
+    job_key: 'j3',
+    source_key: 's3',
+    source_name: 'Overrun Clamp',
+    collection_method: 'Import',
+    schedule_cron: 'manual',
+    expected_format: 'CSV',
+    execution_status: 'completed',
+    progress_percent: 145,
+    imported_records: 10,
+    failed_records: 0,
+    error_log: null,
+    last_execution: '2026-11-23T12:00:00Z',
+    next_execution: '2026-12-01T00:00:00Z',
+  });
+  assert.equal(clampedCompleted.percent, 100);
+
+  const importJob = createImportCollectionJob(DEMO_DATASETS[0], DEMO_SAMPLES, '2026-11-23T13:00:00Z');
+  assert.equal(importJob.execution_status, 'completed');
+  assert.equal(importJob.progress_percent, 100);
+  assert.equal(importJob.imported_records + importJob.failed_records, DEMO_SAMPLES.length);
+
+  const summary = summarizeCollectionJobs([
+    {
+      job_key: 'j1',
+      source_key: 's1',
+      source_name: 'Idle',
+      collection_method: 'Fetch',
+      schedule_cron: '0 0 * * *',
+      expected_format: 'CSV',
+      execution_status: 'idle',
+      imported_records: 0,
+      failed_records: 0,
+      error_log: null,
+      last_execution: null,
+      next_execution: '2026-12-01T00:00:00Z',
+    },
+    importJob,
+  ]);
+  assert.equal(summary.total, 2);
+  assert.equal(summary.idle, 1);
+  assert.equal(summary.completed, 1);
+  assert.equal(summary.averagePercent, 50);
+});
+
+test('parseSafeJsonPayload handles HTML doctype fallbacks and nested JSON error payloads without throwing SyntaxError', async () => {
+  const { parseSafeJsonPayload } = await import('./httpResponse');
+
+  const htmlFallback = parseSafeJsonPayload('<!doctype html><html><body>SPA shell</body></html>', {
+    httpOk: true,
+    status: 200,
+    contentType: 'text/html; charset=utf-8',
+    unavailableMessage: 'API offline in static mode.',
+  });
+  assert.equal(htmlFallback.ok, false);
+  assert.equal(htmlFallback.isHtmlFallback, true);
+  assert.equal(htmlFallback.data, null);
+  assert.equal(htmlFallback.error, 'API offline in static mode.');
+
+  const htmlWithoutHeader = parseSafeJsonPayload('<html><body>404</body></html>', {
+    httpOk: false,
+    status: 404,
+  });
+  assert.equal(htmlWithoutHeader.ok, false);
+  assert.equal(htmlWithoutHeader.isHtmlFallback, true);
+
+  const validJson = parseSafeJsonPayload<{ status: string }>('{"status":"ok"}', {
+    httpOk: true,
+    status: 200,
+    contentType: 'application/json',
+  });
+  assert.equal(validJson.ok, true);
+  assert.equal(validJson.isHtmlFallback, false);
+  assert.deepEqual(validJson.data, { status: 'ok' });
+
+  const nestedGeminiError = parseSafeJsonPayload(
+    JSON.stringify({
+      error: JSON.stringify({
+        error: { code: 503, message: 'This model is currently experiencing high demand.' },
+      }),
+    }),
+    {
+      httpOk: false,
+      status: 502,
+      contentType: 'application/json',
+    }
+  );
+  assert.equal(nestedGeminiError.ok, false);
+  assert.equal(nestedGeminiError.isHtmlFallback, false);
+  assert.equal(nestedGeminiError.error, 'This model is currently experiencing high demand.');
+
+  const emptyPayload = parseSafeJsonPayload('   ', {
+    httpOk: true,
+    status: 200,
+  });
+  assert.equal(emptyPayload.ok, false);
+  assert.equal(emptyPayload.isHtmlFallback, false);
+  assert.match(emptyPayload.error!, /Empty JSON/);
+
+  const plainTextError = parseSafeJsonPayload('Bad Gateway from upstream proxy', {
+    httpOk: false,
+    status: 502,
+    contentType: 'text/plain',
+  });
+  assert.equal(plainTextError.ok, false);
+  assert.equal(plainTextError.isHtmlFallback, false);
+  assert.equal(plainTextError.error, 'Bad Gateway from upstream proxy');
+});
+
+test('connectivityMonitor derives Gemini, SQL, and Firebase indicators and aggregates ping history', async () => {
+  const {
+    normalizeApiBaseUrl,
+    buildApiUrl,
+    deriveConnectivityIndicators,
+    appendHealthPingSample,
+    buildLocalDeterministicMemo,
+  } = await import('./connectivityMonitor');
+
+  assert.equal(normalizeApiBaseUrl('https://service.run.app///'), 'https://service.run.app');
+  assert.equal(normalizeApiBaseUrl('ftp://invalid.local'), '');
+  assert.equal(buildApiUrl('/api/health', 'https://service.run.app/'), 'https://service.run.app/api/health');
+  assert.equal(buildApiUrl('/api/health', ''), '/api/health');
+
+  const onlineIndicators = deriveConnectivityIndicators({
+    healthResult: {
+      ok: true,
+      status: 200,
+      isHtmlFallback: false,
+      error: null,
+      data: {
+        ok: true,
+        service: 'TEXTPRINT',
+        geminiConfigured: true,
+        sqlConfigured: true,
+        firebaseConfigured: true,
+      },
+    },
+    firestoreConnected: true,
+    lastLatencyMs: 18,
+    isPinging: false,
+  });
+  assert.equal(onlineIndicators.find((i) => i.id === 'gemini')?.status, 'online');
+  assert.equal(onlineIndicators.find((i) => i.id === 'sql')?.status, 'online');
+  assert.equal(onlineIndicators.find((i) => i.id === 'firebase')?.status, 'online');
+
+  const staticIndicators = deriveConnectivityIndicators({
+    healthResult: {
+      ok: false,
+      status: 200,
+      isHtmlFallback: true,
+      error: 'Static hosting detected',
+      data: null,
+    },
+    firestoreConnected: true,
+    lastLatencyMs: 9,
+    isPinging: false,
+  });
+  assert.equal(staticIndicators.find((i) => i.id === 'gemini')?.badgeText, 'Static Host');
+  assert.equal(staticIndicators.find((i) => i.id === 'sql')?.status, 'degraded');
+  assert.equal(staticIndicators.find((i) => i.id === 'firebase')?.status, 'online');
+
+  let history: import('./connectivityMonitor').HealthPingSample[] = [];
+  for (let i = 0; i < 15; i++) {
+    const agg = appendHealthPingSample(
+      history,
+      {
+        id: `p-${i}`,
+        timestamp: '2026-11-23T13:25:00Z',
+        ok: i % 2 === 0,
+        isHtmlFallback: false,
+        latencyMs: 20,
+        geminiConfigured: true,
+        sqlConfigured: false,
+        firebaseConnected: true,
+      },
+      12
+    );
+    history = agg.samples;
+    if (i === 14) {
+      assert.equal(agg.samples.length, 12);
+      assert.equal(agg.averageLatencyMs, 20);
+      assert.equal(agg.successRatePercent, 50);
+    }
+  }
+
+  const ling = analyzeTextLinguistics(DEMO_SAMPLES[0].text);
+  const cls = classifyTextProbabilistically(DEMO_SAMPLES[0].text);
+  const memo = buildLocalDeterministicMemo(ling, cls);
+  assert.match(memo, /Local Deterministic Stylometry Summary/);
+  assert.match(memo, /Guiraud R/);
+});
+
+test('csvExport filters corpus samples and round-trips RFC-4180 CSV with UTF-8 BOM and Arabic/quoted text', async () => {
+  const {
+    DEFAULT_EXPORT_FILTER,
+    filterSamplesForExport,
+    serializeSamplesToCsv,
+    buildCsvExportFilename,
+  } = await import('./csvExport');
+
+  const arOnly = filterSamplesForExport(DEMO_SAMPLES, {
+    ...DEFAULT_EXPORT_FILTER,
+    language: 'ar',
+  });
+  assert.ok(arOnly.length >= 2);
+  assert.ok(arOnly.every((s) => s.language === 'ar'));
+
+  const verifiedHuman = filterSamplesForExport(DEMO_SAMPLES, {
+    ...DEFAULT_EXPORT_FILTER,
+    originClass: 'human',
+    validationStatus: 'verified',
+  });
+  assert.ok(verifiedHuman.length >= 1);
+  assert.ok(verifiedHuman.every((s) => s.origin.class === 'human' && s.validation.status === 'verified'));
+
+  const excludedDemo = filterSamplesForExport(DEMO_SAMPLES, {
+    ...DEFAULT_EXPORT_FILTER,
+    excludeSyntheticDemo: true,
+  });
+  assert.equal(excludedDemo.length, 0);
+
+  const trickySample = {
+    ...DEMO_SAMPLES[0],
+    sample_id: 'TX-CSV-QUOTE',
+    text: 'Observed "quoted" telemetry,\r\nacross two lines and Egyptian Arabic: تجربة التصدير.',
+  };
+  const csvWithBom = serializeSamplesToCsv([trickySample, ...arOnly], {
+    includeMetadata: true,
+    includeBom: true,
+  });
+  assert.ok(csvWithBom.startsWith('\uFEFF'));
+
+  const parsedRows = parseCsvRows(csvWithBom);
+  assert.equal(parsedRows[0][0], 'sample_id');
+  assert.equal(parsedRows[1][0], 'TX-CSV-QUOTE');
+  assert.equal(parsedRows[1][2], trickySample.text);
+
+  const reimported = parseImportedDatasetText(csvWithBom, 'csv');
+  assert.equal(reimported.errors.length, 0);
+  assert.equal(reimported.records.length, 1 + arOnly.length);
+  assert.equal(reimported.records[0].text, trickySample.text);
+
+  const filename = buildCsvExportFilename(
+    {
+      ...DEFAULT_EXPORT_FILTER,
+      layer: 'approved',
+      language: 'ar',
+      originClass: 'human',
+    },
+    new Date('2026-11-23T12:00:00Z')
+  );
+  assert.equal(filename, 'textprint-samples-approved-ar-human-2026-11-23.csv');
+});
+
+test('datasetSearch locates samples by ID, provenance metadata, content keyword, and multi-filter criteria', async () => {
+  const {
+    DEFAULT_DATASET_FILTER,
+    filterDatasetManagementSamples,
+    hasActiveDatasetFilters,
+  } = await import('./datasetSearch');
+
+  assert.equal(hasActiveDatasetFilters(DEFAULT_DATASET_FILTER), false);
+
+  const byId = filterDatasetManagementSamples(DEMO_SAMPLES, DEMO_DATASETS, {
+    ...DEFAULT_DATASET_FILTER,
+    query: 'TX-AI-000001',
+    scope: 'id',
+  });
+  assert.equal(byId.length, 1);
+  assert.equal(byId[0].sample_id, 'TX-AI-000001');
+
+  const byProvenance = filterDatasetManagementSamples(DEMO_SAMPLES, DEMO_DATASETS, {
+    ...DEFAULT_DATASET_FILTER,
+    query: 'CC0-1.0',
+    scope: 'provenance',
+  });
+  assert.equal(byProvenance.length, DEMO_SAMPLES.length);
+
+  const contentNotMatchingProvenance = filterDatasetManagementSamples(DEMO_SAMPLES, DEMO_DATASETS, {
+    ...DEFAULT_DATASET_FILTER,
+    query: 'CC0-1.0',
+    scope: 'content',
+  });
+  assert.equal(contentNotMatchingProvenance.length, 0);
+
+  const byArabicContent = filterDatasetManagementSamples(DEMO_SAMPLES, DEMO_DATASETS, {
+    ...DEFAULT_DATASET_FILTER,
+    query: 'التحول الرقمي',
+    scope: 'content',
+    language: 'ar',
+  });
+  assert.equal(byArabicContent.length, 1);
+  assert.equal(byArabicContent[0].sample_id, 'TX-AI-000002');
+  assert.equal(hasActiveDatasetFilters({ ...DEFAULT_DATASET_FILTER, language: 'ar' }), true);
+});
+
+test('bulkValidation toggles selections, computes filtered stats, and validates batches atomically', async () => {
+  const {
+    applyBulkSampleValidation,
+    getFilteredSelectionStats,
+    pruneSelectionToExisting,
+    toggleSelectAllFiltered,
+    toggleSampleSelection,
+  } = await import('./bulkValidation');
+
+  let selected = new Set<string>();
+  selected = toggleSampleSelection(selected, 'TX-HUM-000001');
+  selected = toggleSampleSelection(selected, 'TX-AI-000001');
+  assert.equal(selected.size, 2);
+  selected = toggleSampleSelection(selected, 'TX-AI-000001');
+  assert.equal(selected.size, 1);
+  assert.equal(selected.has('TX-HUM-000001'), true);
+
+  const arSubset = DEMO_SAMPLES.filter((s) => s.language === 'ar');
+  selected = toggleSelectAllFiltered(selected, arSubset);
+  // TX-HUM-000001 (EN) stays selected + all AR samples
+  assert.equal(selected.size, 1 + arSubset.length);
+
+  const statsFullSubset = getFilteredSelectionStats(selected, arSubset);
+  assert.equal(statsFullSubset.allVisibleSelected, true);
+  assert.equal(statsFullSubset.someVisibleSelected, false);
+  assert.equal(statsFullSubset.hiddenSelected, 1);
+
+  const statsAll = getFilteredSelectionStats(selected, DEMO_SAMPLES);
+  assert.equal(statsAll.allVisibleSelected, false);
+  assert.equal(statsAll.someVisibleSelected, true);
+  assert.equal(statsAll.hiddenSelected, 0);
+
+  // Toggling select-all again on arSubset unselects only arSubset
+  selected = toggleSelectAllFiltered(selected, arSubset);
+  assert.equal(selected.size, 1);
+  assert.equal(selected.has('TX-HUM-000001'), true);
+
+  // Prune drops missing IDs
+  const withStale = new Set([...selected, 'NON-EXISTENT-ID']);
+  const pruned = pruneSelectionToExisting(withStale, DEMO_SAMPLES);
+  assert.equal(pruned.has('NON-EXISTENT-ID'), false);
+  assert.equal(pruned.size, 1);
+
+  // Atomic bulk quarantine + bulk verify
+  const quarantineRes = applyBulkSampleValidation(
+    DEMO_SAMPLES,
+    ['TX-AEH-000001', 'TX-UNK-000001', 'MISSING-ID'],
+    'quarantined',
+    undefined,
+    'Suspected cross-corpus overlap'
+  );
+  assert.deepEqual(quarantineRes.updatedIds, ['TX-AEH-000001', 'TX-UNK-000001']);
+  assert.deepEqual(quarantineRes.skippedIds, ['MISSING-ID']);
+  assert.equal(quarantineRes.resolvedLayer, 'raw');
+
+  const q1 = quarantineRes.nextSamples.find((s) => s.sample_id === 'TX-AEH-000001')!;
+  const q2 = quarantineRes.nextSamples.find((s) => s.sample_id === 'TX-UNK-000001')!;
+  const untouched = quarantineRes.nextSamples.find((s) => s.sample_id === 'TX-HUM-000001')!;
+  assert.equal(q1.validation.status, 'quarantined');
+  assert.equal(q1.validation.verified, false);
+  assert.equal(q1.layer, 'raw');
+  assert.equal(q2.validation.status, 'quarantined');
+  assert.ok(q2.validation.validation_notes.includes('Suspected cross-corpus overlap'));
+  assert.equal(untouched.validation.status, 'verified');
+
+  const verifyRes = applyBulkSampleValidation(
+    quarantineRes.nextSamples,
+    ['TX-AEH-000001', 'TX-UNK-000001'],
+    'verified'
+  );
+  assert.equal(verifyRes.resolvedLayer, 'approved');
+  const v1 = verifyRes.nextSamples.find((s) => s.sample_id === 'TX-AEH-000001')!;
+  assert.equal(v1.validation.status, 'verified');
+  assert.equal(v1.validation.verified, true);
+  assert.equal(v1.layer, 'approved');
+});
+

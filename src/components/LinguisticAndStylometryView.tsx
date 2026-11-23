@@ -14,6 +14,9 @@ import type {
   TextSample,
   WritingPattern,
 } from '../engine/types';
+import { classifyTextProbabilistically } from '../engine/classifier';
+import { buildLocalDeterministicMemo } from '../engine/connectivityMonitor';
+import { safeFetchJson } from '../lib/safeFetchJson';
 
 interface Props {
   initialSubView: 'linguistic' | 'patterns' | 'stylometry';
@@ -126,6 +129,7 @@ export function LinguisticAndStylometryView({
   const [activeSampleId, setActiveSampleId] = useState(samples[0]?.sample_id ?? DEMO_SAMPLES[0].sample_id);
   const [customText, setCustomText] = useState(samples[0]?.text ?? DEMO_SAMPLES[0].text);
   const [deepMemo, setDeepMemo] = useState<string | null>(null);
+  const [deepMemoSource, setDeepMemoSource] = useState<'gemini' | 'local' | null>(null);
   const [deepLoading, setDeepLoading] = useState(false);
   const [deepError, setDeepError] = useState<string | null>(null);
 
@@ -152,26 +156,41 @@ export function LinguisticAndStylometryView({
     setDeepLoading(true);
     setDeepError(null);
     try {
-      const res = await fetch('/api/ai/analyze-deep', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: customText,
-          metricsSummary: {
-            language: metrics.detected_language,
-            dialect: metrics.detected_dialect,
-            word_count: metrics.word_count,
-            guiraud_r: metrics.vocabulary.guiraud_r,
-            burstiness_index: metrics.sentence_structure.burstiness_index,
-            transition_density: metrics.writing_style.transition_density,
-            punctuation_entropy: metrics.punctuation.punctuation_entropy,
-            passive_voice_ratio: metrics.additional.passive_voice_ratio,
-          },
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Deep analysis failed.');
-      setDeepMemo(data.analysis);
+      const result = await safeFetchJson<{ analysis?: string }>(
+        '/api/ai/analyze-deep',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: customText,
+            metricsSummary: {
+              language: metrics.detected_language,
+              dialect: metrics.detected_dialect,
+              word_count: metrics.word_count,
+              guiraud_r: metrics.vocabulary.guiraud_r,
+              burstiness_index: metrics.sentence_structure.burstiness_index,
+              transition_density: metrics.writing_style.transition_density,
+              punctuation_entropy: metrics.punctuation.punctuation_entropy,
+              passive_voice_ratio: metrics.additional.passive_voice_ratio,
+            },
+          }),
+        },
+        'Deep Thinking Gemini analysis requires the Express backend server (not available on static hosting).'
+      );
+      if (!result.ok || !result.data) {
+        if (result.isHtmlFallback) {
+          const localClassification = classifyTextProbabilistically(customText);
+          setDeepMemo(buildLocalDeterministicMemo(metrics, localClassification));
+          setDeepMemoSource('local');
+          setDeepError(
+            `${result.error} Displaying local deterministic stylometric summary below (or attach an Express Cloud Run URL in 14. Admin & Governance).`
+          );
+          return;
+        }
+        throw new Error(result.error || 'Deep analysis failed.');
+      }
+      setDeepMemo(result.data.analysis || '');
+      setDeepMemoSource('gemini');
     } catch (err) {
       setDeepError(err instanceof Error ? err.message : 'Deep analysis request failed.');
     } finally {
@@ -271,11 +290,17 @@ export function LinguisticAndStylometryView({
               </button>
             </div>
 
-            {deepError && <p className="text-xs text-rose-600 dark:text-rose-400">{deepError}</p>}
+            {deepError && (
+              <p role="alert" className="text-xs text-amber-700 dark:text-amber-400">
+                {deepError}
+              </p>
+            )}
             {deepMemo && (
               <div className="p-4 rounded-md bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5">
                 <p className="text-xs font-mono font-medium text-sky-700 dark:text-sky-400">
-                  Gemini Deep Reasoning Memo (gemini-4-hydrogen · ThinkingLevel.HIGH)
+                  {deepMemoSource === 'local'
+                    ? `Local Deterministic Stylometry Memo (${metrics.engine_version} · Offline Fallback)`
+                    : 'Gemini Deep Reasoning Memo (gemini-4-hydrogen · ThinkingLevel.HIGH)'}
                 </p>
                 <div className="text-xs text-slate-800 dark:text-slate-200 whitespace-pre-wrap leading-relaxed">
                   {deepMemo}

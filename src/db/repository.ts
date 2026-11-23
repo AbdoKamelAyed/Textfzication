@@ -1,4 +1,4 @@
-import { desc, eq } from 'drizzle-orm';
+import { desc, eq, inArray } from 'drizzle-orm';
 import { db, isSqlAvailable, markSqlUnavailable } from './index.ts';
 import {
   auditLogs,
@@ -381,6 +381,61 @@ export async function updateSampleValidation(
     }
   }
   return idx >= 0;
+}
+
+export async function bulkUpdateSampleValidation(
+  sampleIds: string[],
+  status: TextSample['validation']['status'],
+  layer: TextSample['layer'],
+  note: string,
+  actorUid: string
+): Promise<{ updatedCount: number; persistedToSql: boolean }> {
+  const cleanIds = Array.from(new Set(sampleIds.map((id) => id.trim()).filter(Boolean)));
+  if (cleanIds.length === 0) {
+    return { updatedCount: 0, persistedToSql: false };
+  }
+  const idSet = new Set(cleanIds);
+  let memoryUpdated = 0;
+
+  memoryStore.samples = memoryStore.samples.map((existing) => {
+    if (!idSet.has(existing.sample_id)) return existing;
+    memoryUpdated += 1;
+    return {
+      ...existing,
+      layer,
+      validation: {
+        status,
+        verified: status === 'verified',
+        validation_notes: [note, ...existing.validation.validation_notes],
+      },
+    };
+  });
+
+  memoryStore.auditLogs.unshift({
+    id: `audit-${Date.now()}`,
+    timestamp: new Date().toISOString(),
+    actor: actorUid,
+    action: 'SAMPLES_BULK_VALIDATED',
+    target_type: 'sample_batch',
+    target_id: `${cleanIds.length} sample(s)`,
+    details: `Bulk Status=${status}, Layer=${layer} (${cleanIds.slice(0, 4).join(', ')}${cleanIds.length > 4 ? ', ...' : ''}): ${note}`,
+  });
+
+  if (await isSqlAvailable()) {
+    try {
+      await db
+        .update(samples)
+        .set({
+          validationStatus: status,
+          verified: status === 'verified',
+        })
+        .where(inArray(samples.sampleId, cleanIds));
+      return { updatedCount: memoryUpdated || cleanIds.length, persistedToSql: true };
+    } catch {
+      markSqlUnavailable();
+    }
+  }
+  return { updatedCount: memoryUpdated, persistedToSql: false };
 }
 
 export async function saveExperimentRecord(

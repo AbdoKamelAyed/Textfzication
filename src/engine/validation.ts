@@ -1,5 +1,5 @@
 import { analyzeTextLinguistics, detectLanguageAndDialect, normalizeUnicodeText } from './linguistic.ts';
-import type { OriginClass, TextSample, ValidationStatus } from './types.ts';
+import type { DatasetRecord, OriginClass, TextSample, ValidationStatus } from './types.ts';
 
 export interface SampleValidationReport {
   sample_id: string;
@@ -174,57 +174,87 @@ export interface ParsedImportRecord {
   author_pseudo_id?: string | null;
 }
 
-function splitCsvLine(line: string): string[] {
-  const result: string[] = [];
-  let current = '';
+export interface CsvColumnMapping {
+  text?: string;
+  language?: string;
+  domain?: string;
+  writing_type?: string;
+  origin_class?: string;
+  origin_model?: string;
+  author_pseudo_id?: string;
+}
+
+export function parseCsvRows(rawCsv: string): string[][] {
+  const input = rawCsv.replace(/^\uFEFF/, '');
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = '';
   let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
+
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input[i];
     if (ch === '"') {
-      if (inQuotes && line[i + 1] === '"') {
-        current += '"';
+      if (inQuotes && input[i + 1] === '"') {
+        field += '"';
         i += 1;
       } else {
         inQuotes = !inQuotes;
       }
     } else if (ch === ',' && !inQuotes) {
-      result.push(current.trim());
-      current = '';
+      row.push(field.trim());
+      field = '';
+    } else if ((ch === '\n' || ch === '\r') && !inQuotes) {
+      if (ch === '\r' && input[i + 1] === '\n') {
+        i += 1;
+      }
+      row.push(field.trim());
+      if (row.some((cell) => cell.length > 0)) {
+        rows.push(row);
+      }
+      row = [];
+      field = '';
     } else {
-      current += ch;
+      field += ch;
     }
   }
-  result.push(current.trim());
-  return result;
+
+  row.push(field.trim());
+  if (row.some((cell) => cell.length > 0)) {
+    rows.push(row);
+  }
+  return rows;
+}
+
+function normalizeOriginValue(v: unknown): OriginClass {
+  const s = String(v || '').toLowerCase().trim();
+  if (
+    s === 'human' ||
+    s === 'ai' ||
+    s === 'human_edited_ai' ||
+    s === 'ai_edited_human' ||
+    s === 'mixed' ||
+    s === 'unknown'
+  ) {
+    return s;
+  }
+  return 'unknown';
 }
 
 export function parseImportedDatasetText(
   rawContent: string,
-  format: 'csv' | 'json' | 'jsonl' | 'txt' | 'xml'
+  format: 'csv' | 'json' | 'jsonl' | 'txt' | 'xml',
+  columnOverrides?: CsvColumnMapping
 ): { records: ParsedImportRecord[]; detectedColumns: string[]; errors: string[] } {
   const errors: string[] = [];
   const records: ParsedImportRecord[] = [];
   let detectedColumns: string[] = [];
 
-  const trimmed = rawContent.trim();
+  const trimmed = rawContent.replace(/^\uFEFF/, '').trim();
   if (!trimmed) {
     return { records: [], detectedColumns: [], errors: ['Empty input payload.'] };
   }
 
-  const validOrigin = (v: unknown): OriginClass => {
-    const s = String(v || '').toLowerCase().trim();
-    if (
-      s === 'human' ||
-      s === 'ai' ||
-      s === 'human_edited_ai' ||
-      s === 'ai_edited_human' ||
-      s === 'mixed' ||
-      s === 'unknown'
-    ) {
-      return s;
-    }
-    return 'unknown';
-  };
+  const validOrigin = normalizeOriginValue;
 
   if (format === 'json') {
     try {
@@ -275,31 +305,64 @@ export function parseImportedDatasetText(
       }
     });
   } else if (format === 'csv') {
-    const lines = trimmed.split(/\r?\n/).filter((l) => l.trim().length > 0);
-    if (lines.length < 2) {
+    const rows = parseCsvRows(trimmed);
+    if (rows.length < 2) {
       errors.push('CSV requires a header row and at least one data row.');
     } else {
-      detectedColumns = splitCsvLine(lines[0]).map((h) => h.toLowerCase());
-      const textIdx = detectedColumns.findIndex((c) => ['text', 'content', 'body', 'passage'].includes(c));
+      detectedColumns = rows[0].map((h) => h.toLowerCase().trim());
+      const findCol = (override: string | undefined, candidates: string[]) => {
+        if (override) {
+          const idx = detectedColumns.indexOf(override.toLowerCase().trim());
+          if (idx >= 0) return idx;
+        }
+        return detectedColumns.findIndex((c) => candidates.includes(c));
+      };
+
+      const textIdx = findCol(columnOverrides?.text, [
+        'text',
+        'content',
+        'body',
+        'passage',
+        'essay',
+        'document',
+        'article',
+        'response',
+        'sentence',
+      ]);
+
       if (textIdx === -1) {
-        errors.push('CSV header must contain a "text", "content", "body", or "passage" column.');
+        errors.push(
+          'CSV header must contain a text column ("text", "content", "body", "passage", or mapped column).'
+        );
       } else {
-        const langIdx = detectedColumns.indexOf('language');
-        const domIdx = detectedColumns.indexOf('domain');
-        const typeIdx = detectedColumns.indexOf('writing_type');
-        const originIdx = detectedColumns.findIndex((c) => ['origin_class', 'origin', 'label'].includes(c));
-        const modelIdx = detectedColumns.findIndex((c) => ['origin_model', 'model'].includes(c));
-        for (let i = 1; i < lines.length; i++) {
-          const cols = splitCsvLine(lines[i]);
+        const langIdx = findCol(columnOverrides?.language, ['language', 'lang']);
+        const domIdx = findCol(columnOverrides?.domain, ['domain', 'topic', 'category']);
+        const typeIdx = findCol(columnOverrides?.writing_type, ['writing_type', 'genre', 'type']);
+        const originIdx = findCol(columnOverrides?.origin_class, [
+          'origin_class',
+          'origin',
+          'label',
+          'author_type',
+        ]);
+        const modelIdx = findCol(columnOverrides?.origin_model, ['origin_model', 'model', 'llm']);
+        const authorIdx = findCol(columnOverrides?.author_pseudo_id, [
+          'author_pseudo_id',
+          'author_id',
+          'author',
+        ]);
+
+        for (let i = 1; i < rows.length; i += 1) {
+          const cols = rows[i];
           const text = (cols[textIdx] || '').trim();
           if (text) {
             records.push({
               text,
-              language: langIdx >= 0 ? cols[langIdx] : undefined,
-              domain: domIdx >= 0 ? cols[domIdx] : undefined,
-              writing_type: typeIdx >= 0 ? cols[typeIdx] : undefined,
+              language: langIdx >= 0 && cols[langIdx] ? cols[langIdx] : undefined,
+              domain: domIdx >= 0 && cols[domIdx] ? cols[domIdx] : undefined,
+              writing_type: typeIdx >= 0 && cols[typeIdx] ? cols[typeIdx] : undefined,
               origin_class: originIdx >= 0 ? validOrigin(cols[originIdx]) : 'unknown',
               origin_model: modelIdx >= 0 && cols[modelIdx] ? cols[modelIdx] : null,
+              author_pseudo_id: authorIdx >= 0 && cols[authorIdx] ? cols[authorIdx] : null,
             });
           }
         }
@@ -335,6 +398,140 @@ export function parseImportedDatasetText(
   }
 
   return { records, detectedColumns, errors };
+}
+
+export interface CsvBatchFileInput {
+  fileName: string;
+  content: string;
+}
+
+export interface CsvBatchFileSummary {
+  fileName: string;
+  rowCount: number;
+  validCount: number;
+  quarantinedCount: number;
+  detectedColumns: string[];
+  errors: string[];
+}
+
+export interface CsvBatchImportResult {
+  dataset: DatasetRecord;
+  builtSamples: TextSample[];
+  fileSummaries: CsvBatchFileSummary[];
+  detectedColumns: string[];
+  quarantinedCount: number;
+  errors: string[];
+}
+
+export function processCsvFileBatch(
+  files: CsvBatchFileInput[],
+  existingSamples: TextSample[],
+  options: {
+    datasetName: string;
+    license: string;
+    isSyntheticDemo: boolean;
+    columnOverrides?: CsvColumnMapping;
+    idSeed?: string;
+  }
+): CsvBatchImportResult {
+  const dsKey =
+    options.datasetName
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '') || `csv-batch-${Date.now().toString(36)}`;
+
+  const nowIso = new Date().toISOString();
+  const seed = (options.idSeed || Date.now().toString(36)).toUpperCase().slice(-4);
+  const existingPlusBatch = [...existingSamples];
+  const builtSamples: TextSample[] = [];
+  const fileSummaries: CsvBatchFileSummary[] = [];
+  const columnSet = new Set<string>();
+  const allErrors: string[] = [];
+  let totalQuarantined = 0;
+  let globalIdx = 0;
+
+  for (const file of files) {
+    const parsed = parseImportedDatasetText(file.content, 'csv', options.columnOverrides);
+    for (const col of parsed.detectedColumns) {
+      columnSet.add(col);
+    }
+
+    let fileValid = 0;
+    let fileQuarantined = 0;
+    const fileErrors = [...parsed.errors];
+    if (parsed.records.length === 0 && fileErrors.length === 0) {
+      fileErrors.push('No non-empty text rows found.');
+    }
+    for (const err of fileErrors) {
+      allErrors.push(`${file.fileName}: ${err}`);
+    }
+
+    for (const rec of parsed.records) {
+      globalIdx += 1;
+      const prefix =
+        rec.origin_class === 'human'
+          ? 'HUM'
+          : rec.origin_class === 'ai'
+            ? 'AI'
+            : rec.origin_class === 'human_edited_ai'
+              ? 'HEA'
+              : rec.origin_class === 'ai_edited_human'
+                ? 'AEH'
+                : 'UNK';
+      const sid = `TX-${prefix}-${seed}${String(globalIdx).padStart(3, '0')}`;
+      const sample = buildSampleFromImport(rec, {
+        sampleId: sid,
+        datasetKey: dsKey,
+        license: options.license.trim() || 'CC-BY-4.0',
+        source: `csv_drop:${file.fileName}`,
+        isSyntheticDemo: options.isSyntheticDemo,
+      });
+
+      const validation = validateSampleQuality(sample, existingPlusBatch);
+      if (!validation.passed) {
+        sample.validation.status = 'quarantined';
+        sample.validation.validation_notes = validation.issues.map((iss) => iss.message);
+        fileQuarantined += 1;
+        totalQuarantined += 1;
+      } else {
+        if (validation.issues.length > 0) {
+          sample.validation.validation_notes = validation.issues.map((iss) => iss.message);
+        }
+        fileValid += 1;
+      }
+      builtSamples.push(sample);
+      existingPlusBatch.push(sample);
+    }
+
+    fileSummaries.push({
+      fileName: file.fileName,
+      rowCount: parsed.records.length,
+      validCount: fileValid,
+      quarantinedCount: fileQuarantined,
+      detectedColumns: parsed.detectedColumns,
+      errors: fileErrors,
+    });
+  }
+
+  return {
+    dataset: {
+      dataset_key: dsKey,
+      name: options.datasetName.trim() || 'CSV Batch Import',
+      description: `Batch imported ${builtSamples.length} record(s) from ${files.length} CSV file(s).`,
+      layer: 'raw',
+      version: '1.0.0',
+      license: options.license.trim() || 'CC-BY-4.0',
+      is_synthetic_demo: options.isSyntheticDemo,
+      source_type: 'csv_batch_drop',
+      created_at: nowIso,
+      updated_at: nowIso,
+    },
+    builtSamples,
+    fileSummaries,
+    detectedColumns: Array.from(columnSet),
+    quarantinedCount: totalQuarantined,
+    errors: allErrors,
+  };
 }
 
 export function buildSampleFromImport(

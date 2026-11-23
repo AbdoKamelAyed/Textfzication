@@ -24,6 +24,7 @@ import {
   listUserNotesFromFirestore,
   saveResearchNoteToFirestore,
 } from '../lib/firebase';
+import { safeFetchJson } from '../lib/safeFetchJson';
 
 interface Props {
   initialSubView: 'reports' | 'copilot';
@@ -340,7 +341,7 @@ export function ReportsAndCopilotView({
         `--${boundary}\r\nContent-Type: application/json\r\n\r\n` +
         `${bodyPayload}\r\n--${boundary}--`;
 
-      const res = await fetch(
+      const result = await safeFetchJson<{ id: string; name: string }>(
         'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink',
         {
           method: 'POST',
@@ -349,15 +350,15 @@ export function ReportsAndCopilotView({
             'Content-Type': `multipart/related; boundary=${boundary}`,
           },
           body: multipartBody,
-        }
+        },
+        'Unexpected HTML response from Google Drive upload.'
       );
 
-      if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(errText || `Drive upload failed (${res.status}).`);
+      if (!result.ok || !result.data) {
+        throw new Error(result.error || `Drive upload failed (${result.status}).`);
       }
 
-      const uploaded = (await res.json()) as { id: string; name: string };
+      const uploaded = result.data;
       setDriveStatus(`Saved "${uploaded.name}" to Google Drive (File ID: ${uploaded.id}).`);
       onLogAudit(
         'EXPORT_DRIVE_REPORT',
@@ -403,19 +404,27 @@ export function ReportsAndCopilotView({
         text: idx === nextMessages.length - 1 ? `${contextHeader}${m.text}` : m.text,
       }));
 
-      const res = await fetch('/api/ai/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: apiMessages,
-          useSearch,
-          mode: chatMode,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Copilot request failed.');
+      const result = await safeFetchJson<{
+        text?: string;
+        modelUsed?: string;
+        groundingSources?: Array<{ uri: string; title: string }>;
+      }>(
+        '/api/ai/chat',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            messages: apiMessages,
+            useSearch,
+            mode: chatMode,
+          }),
+        },
+        'AI Research Copilot requires the Express backend server (not available on static hosting).'
+      );
+      if (!result.ok || !result.data) {
+        throw new Error(result.error || 'Copilot request failed.');
       }
+      const data = result.data;
 
       const modelMsg: ChatMessage = {
         id: `mod_${Date.now().toString(36)}`,

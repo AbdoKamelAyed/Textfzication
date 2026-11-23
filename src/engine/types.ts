@@ -248,6 +248,9 @@ export interface CollectionJob {
   error_log: string | null;
   last_execution: string | null;
   next_execution: string;
+  progress_percent?: number;
+  target_records?: number;
+  current_stage?: string;
 }
 
 export interface ExperimentRecord {

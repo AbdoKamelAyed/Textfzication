@@ -11,6 +11,7 @@ import {
   type MouseHandlerDataParam,
 } from 'recharts';
 import { ArrowRight } from 'lucide-react';
+import { summarizeCollectionJobs } from '../engine/collectionJobs';
 import { buildDashboard30DayTrends, type SparklinePoint } from '../engine/dashboardTrends';
 import { RESEARCH_CORPUS_TARGETS } from '../engine/demoCorpus';
 import type {
@@ -470,10 +471,28 @@ export function ResearchDashboard({
               </p>
             </div>
             <div>
-              <span className="text-slate-500 dark:text-slate-400">Collection Jobs</span>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500 dark:text-slate-400">Collection Jobs</span>
+                <span className="font-mono text-[11px] tabular-nums text-slate-500 dark:text-slate-400">
+                  {summarizeCollectionJobs(jobs).averagePercent}%
+                </span>
+              </div>
               <p className="font-mono text-slate-900 dark:text-slate-100 mt-0.5 tabular-nums">
                 {jobs.length} configured · {jobs.filter((j) => j.execution_status === 'running').length} active
               </p>
+              <div
+                role="progressbar"
+                aria-label="Collection jobs overall progress"
+                aria-valuenow={summarizeCollectionJobs(jobs).averagePercent}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                className="mt-1.5 h-1.5 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden"
+              >
+                <div
+                  className="h-full bg-sky-600 dark:bg-sky-500 transition-all duration-300"
+                  style={{ width: `${summarizeCollectionJobs(jobs).averagePercent}%` }}
+                />
+              </div>
             </div>
           </div>
         </div>

@@ -27,6 +27,14 @@
           "type": "string",
           "enum": ["en", "ar"]
         },
+        "role": {
+          "type": "string",
+          "enum": ["researcher", "reviewer", "admin"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "suspended"]
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time"
@@ -220,6 +228,15 @@
         "email": {
           "type": "string",
           "maxLength": 256
+        },
+        "grantedBy": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
         }
       },
       "required": ["uid", "email"]

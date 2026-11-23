@@ -9,6 +9,7 @@ import {
 } from 'firebase/auth';
 import {
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocFromServer,
@@ -21,7 +22,10 @@ import {
   where,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
+import type { AccountStatus, SystemRole } from '../engine/adminGovernance';
 import type { DatasetRecord, TextSample } from '../engine/types';
+
+export const BOOTSTRAP_ADMIN_EMAIL = 'abdokamel200514@gmail.com';
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
@@ -176,6 +180,8 @@ export async function syncUserProfileToFirestore(user: User, theme: 'light' | 'd
     }
 
     if (!exists) {
+      const initialRole: SystemRole =
+        user.email?.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL ? 'admin' : 'researcher';
       try {
         await setDoc(userRef, {
           uid,
@@ -183,6 +189,8 @@ export async function syncUserProfileToFirestore(user: User, theme: 'light' | 'd
           displayName: (user.displayName || 'Researcher').slice(0, 120),
           theme,
           preferredLanguage: 'en',
+          role: initialRole,
+          status: 'active',
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
@@ -348,5 +356,166 @@ export async function listUserNotesFromFirestore(user: User) {
       });
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, path);
+  }
+}
+
+export interface FirestoreUserRecord {
+  uid: string;
+  email: string;
+  displayName?: string;
+  theme?: 'light' | 'dark';
+  preferredLanguage?: 'en' | 'ar';
+  role?: SystemRole;
+  status?: AccountStatus;
+  updatedAtIso?: string;
+}
+
+export interface FirestoreAdminRecord {
+  uid: string;
+  email: string;
+  grantedBy?: string;
+  createdAtIso?: string;
+}
+
+export async function checkIsAdminUser(user: User | null): Promise<boolean> {
+  if (!user) return false;
+  if (user.email?.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL && user.emailVerified) {
+    return true;
+  }
+  const uid = sanitizeId(user.uid, 128);
+  try {
+    const snap = await getDoc(doc(db, 'admins', uid));
+    return snap.exists();
+  } catch {
+    return false;
+  }
+}
+
+export async function listFirestoreUsers(): Promise<FirestoreUserRecord[]> {
+  const path = 'users';
+  try {
+    const snap = await getDocs(collection(db, 'users'));
+    return snap.docs.map((d) => {
+      const data = d.data();
+      const updatedMs =
+        typeof data.updatedAt?.toMillis === 'function' ? data.updatedAt.toMillis() : null;
+      return {
+        uid: String(data.uid || d.id),
+        email: String(data.email || ''),
+        displayName: data.displayName ? String(data.displayName) : undefined,
+        theme: data.theme === 'dark' ? 'dark' : 'light',
+        preferredLanguage: data.preferredLanguage === 'ar' ? 'ar' : 'en',
+        role: (data.role as SystemRole) || 'researcher',
+        status: (data.status as AccountStatus) || 'active',
+        updatedAtIso: updatedMs ? new Date(updatedMs).toISOString() : undefined,
+      };
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
+}
+
+export async function listFirestoreAdmins(): Promise<FirestoreAdminRecord[]> {
+  const path = 'admins';
+  try {
+    const snap = await getDocs(collection(db, 'admins'));
+    return snap.docs.map((d) => {
+      const data = d.data();
+      const createdMs =
+        typeof data.createdAt?.toMillis === 'function' ? data.createdAt.toMillis() : null;
+      return {
+        uid: String(data.uid || d.id),
+        email: String(data.email || ''),
+        grantedBy: data.grantedBy ? String(data.grantedBy) : undefined,
+        createdAtIso: createdMs ? new Date(createdMs).toISOString() : undefined,
+      };
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
+}
+
+export async function updateUserRoleAndStatus(
+  adminUser: User,
+  targetUid: string,
+  targetEmail: string,
+  role: SystemRole,
+  status: AccountStatus
+): Promise<void> {
+  const cleanTargetUid = sanitizeId(targetUid, 128);
+  const cleanAdminUid = sanitizeId(adminUser.uid, 128);
+  const path = `users/${cleanTargetUid}`;
+  try {
+    await updateDoc(doc(db, 'users', cleanTargetUid), {
+      role,
+      status,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+
+  if (role === 'admin') {
+    await grantAdminAccess(adminUser, cleanTargetUid, targetEmail);
+  } else if (cleanTargetUid !== cleanAdminUid) {
+    const adminRef = doc(db, 'admins', cleanTargetUid);
+    const snap = await getDoc(adminRef).catch(() => null);
+    if (snap?.exists()) {
+      try {
+        await deleteDoc(adminRef);
+      } catch (error) {
+        handleFirestoreError(error, OperationType.DELETE, `admins/${cleanTargetUid}`);
+      }
+    }
+  }
+}
+
+export async function grantAdminAccess(
+  adminUser: User,
+  targetUid: string,
+  targetEmail: string
+): Promise<void> {
+  const cleanTargetUid = sanitizeId(targetUid, 128);
+  const cleanAdminUid = sanitizeId(adminUser.uid, 128);
+  const path = `admins/${cleanTargetUid}`;
+  const adminRef = doc(db, 'admins', cleanTargetUid);
+  let exists = false;
+  try {
+    const snap = await getDoc(adminRef);
+    exists = snap.exists();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, path);
+  }
+
+  if (!exists) {
+    try {
+      await setDoc(adminRef, {
+        uid: cleanTargetUid,
+        email: targetEmail.trim().slice(0, 256),
+        grantedBy: cleanAdminUid,
+        createdAt: serverTimestamp(),
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, path);
+    }
+  } else {
+    try {
+      await updateDoc(adminRef, {
+        email: targetEmail.trim().slice(0, 256),
+        grantedBy: cleanAdminUid,
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, path);
+    }
+  }
+}
+
+export async function revokeAdminAccess(targetUid: string): Promise<void> {
+  const cleanTargetUid = sanitizeId(targetUid, 128);
+  const path = `admins/${cleanTargetUid}`;
+  try {
+    await deleteDoc(doc(db, 'admins', cleanTargetUid));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
   }
 }

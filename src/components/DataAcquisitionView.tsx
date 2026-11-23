@@ -1,20 +1,43 @@
-import { useState } from 'react';
-import { FolderOpen, Search, Upload, Wand2 } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import {
+  Download,
+  FileSpreadsheet,
+  FolderOpen,
+  RotateCcw,
+  Search,
+  Trash2,
+  Upload,
+  Wand2,
+} from 'lucide-react';
+import { computeJobProgress, summarizeCollectionJobs } from '../engine/collectionJobs';
 import { compareTexts } from '../engine/comparison';
+import {
+  buildCsvExportFilename,
+  DEFAULT_EXPORT_FILTER,
+  filterSamplesForExport,
+  serializeSamplesToCsv,
+  type SampleExportFilter,
+} from '../engine/csvExport';
 import { detectLanguageAndDialect } from '../engine/linguistic';
 import type {
   CollectionJob,
   DatasetRecord,
   ExternalSource,
   OriginClass,
+  StorageLayer,
   TextSample,
+  ValidationStatus,
 } from '../engine/types';
 import {
   buildSampleFromImport,
   parseImportedDatasetText,
+  processCsvFileBatch,
   validateSampleQuality,
+  type CsvBatchFileInput,
+  type CsvColumnMapping,
 } from '../engine/validation';
 import { getInMemoryDriveToken } from '../lib/firebase';
+import { safeFetchJson } from '../lib/safeFetchJson';
 
 interface Props {
   datasets: DatasetRecord[];
@@ -25,9 +48,10 @@ interface Props {
   onSignIn: () => void;
   onImportSamples: (dataset: DatasetRecord, newSamples: TextSample[]) => void;
   onRunCollectionJob: (jobKey: string) => void;
+  onLogAudit?: (action: string, targetType: string, targetId: string, details: string) => void;
 }
 
-type AcquisitionTab = 'importer' | 'drive' | 'sources' | 'editing_lab' | 'human_portal';
+type AcquisitionTab = 'importer' | 'export' | 'drive' | 'sources' | 'editing_lab' | 'human_portal';
 
 interface DriveFileItem {
   id: string;
@@ -45,6 +69,7 @@ export function DataAcquisitionView({
   onSignIn,
   onImportSamples,
   onRunCollectionJob,
+  onLogAudit,
 }: Props) {
   const [tab, setTab] = useState<AcquisitionTab>('importer');
 
@@ -58,6 +83,24 @@ export function DataAcquisitionView({
   );
   const [importFeedback, setImportFeedback] = useState<string | null>(null);
   const [detectedCols, setDetectedCols] = useState<string[]>([]);
+
+  // Drag-and-drop CSV batch importer state
+  const [stagedCsvFiles, setStagedCsvFiles] = useState<CsvBatchFileInput[]>([]);
+  const [isDraggingCsv, setIsDraggingCsv] = useState(false);
+  const [csvDropError, setCsvDropError] = useState<string | null>(null);
+  const [csvColumnMap, setCsvColumnMap] = useState<CsvColumnMapping>({});
+
+  const csvBatchPreview = useMemo(() => {
+    if (stagedCsvFiles.length === 0) return null;
+    return processCsvFileBatch(stagedCsvFiles, samples, {
+      datasetName: targetDatasetName,
+      license: licenseId,
+      isSyntheticDemo,
+      columnOverrides: csvColumnMap,
+    });
+  }, [stagedCsvFiles, samples, targetDatasetName, licenseId, isSyntheticDemo, csvColumnMap]);
+
+  const jobsSummary = useMemo(() => summarizeCollectionJobs(jobs), [jobs]);
 
   // Google Drive state
   const [driveFiles, setDriveFiles] = useState<DriveFileItem[]>([]);
@@ -97,9 +140,125 @@ export function DataAcquisitionView({
   const [humanConsent, setHumanConsent] = useState(false);
   const [humanFeedback, setHumanFeedback] = useState<string | null>(null);
 
+  // Filtered Sample Set & CSV Export state
+  const [exportFilter, setExportFilter] = useState<SampleExportFilter>(DEFAULT_EXPORT_FILTER);
+  const [includeCsvMetadata, setIncludeCsvMetadata] = useState(true);
+  const [includeCsvBom, setIncludeCsvBom] = useState(true);
+  const [exportFeedback, setExportFeedback] = useState<string | null>(null);
+
+  const filteredExportSamples = useMemo(
+    () => filterSamplesForExport(samples, exportFilter),
+    [samples, exportFilter]
+  );
+
+  const handleExportFilteredCsv = () => {
+    if (filteredExportSamples.length === 0) return;
+    const csvContent = serializeSamplesToCsv(filteredExportSamples, {
+      includeMetadata: includeCsvMetadata,
+      includeBom: includeCsvBom,
+    });
+    const filename = buildCsvExportFilename(exportFilter);
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+
+    setExportFeedback(
+      `Exported ${filteredExportSamples.length} filtered sample(s) to ${filename}.`
+    );
+    onLogAudit?.(
+      'EXPORT_SAMPLES_CSV',
+      'corpus',
+      filename,
+      `Downloaded ${filteredExportSamples.length} filtered sample(s) as CSV (${includeCsvMetadata ? 'full metadata' : 'minimal columns'}).`
+    );
+  };
+
+  const ingestCsvFiles = async (fileList: FileList | File[]) => {
+    const incoming = Array.from(fileList);
+    if (incoming.length === 0) return;
+
+    const accepted: CsvBatchFileInput[] = [];
+    const rejectedNames: string[] = [];
+
+    for (const file of incoming) {
+      const isCsv =
+        file.name.toLowerCase().endsWith('.csv') ||
+        file.type === 'text/csv' ||
+        file.type === 'application/csv' ||
+        file.type === 'application/vnd.ms-excel';
+      if (!isCsv) {
+        rejectedNames.push(file.name);
+        continue;
+      }
+      const content = await file.text();
+      accepted.push({ fileName: file.name, content });
+    }
+
+    if (rejectedNames.length > 0) {
+      setCsvDropError(
+        `Skipped non-CSV file(s): ${rejectedNames.join(', ')}. Drop .csv files for batch import.`
+      );
+    } else {
+      setCsvDropError(null);
+    }
+
+    if (accepted.length > 0) {
+      setStagedCsvFiles((prev) => {
+        const map = new Map(prev.map((f) => [f.fileName, f]));
+        for (const item of accepted) {
+          map.set(item.fileName, item);
+        }
+        return Array.from(map.values());
+      });
+      if (targetDatasetName === 'Custom Research Import') {
+        const baseName =
+          accepted.length === 1
+            ? accepted[0].fileName.replace(/\.csv$/i, '')
+            : `CSV Batch (${accepted.length} files)`;
+        setTargetDatasetName(baseName);
+      }
+      setFormat('csv');
+      setImportFeedback(
+        `Staged ${accepted.length} CSV file(s). Review schema mapping and validation summary below.`
+      );
+    }
+  };
+
+  const handleCsvDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingCsv(false);
+    if (e.dataTransfer?.files?.length) {
+      void ingestCsvFiles(e.dataTransfer.files);
+    }
+  };
+
+  const handleCommitCsvBatch = () => {
+    if (!csvBatchPreview || csvBatchPreview.builtSamples.length === 0) return;
+    onImportSamples(csvBatchPreview.dataset, csvBatchPreview.builtSamples);
+    setImportFeedback(
+      `Batch imported ${csvBatchPreview.builtSamples.length} sample(s) from ${stagedCsvFiles.length} CSV file(s) into RAW layer (${csvBatchPreview.quarantinedCount} flagged for quality review).`
+    );
+    setStagedCsvFiles([]);
+    setCsvColumnMap({});
+    setCsvDropError(null);
+  };
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const fileList = e.target.files;
+    if (!fileList || fileList.length === 0) return;
+    if (fileList.length > 1 || fileList[0].name.toLowerCase().endsWith('.csv')) {
+      await ingestCsvFiles(fileList);
+      e.target.value = '';
+      return;
+    }
+    const file = fileList[0];
     const ext = file.name.split('.').pop()?.toLowerCase();
     if (ext === 'csv' || ext === 'json' || ext === 'jsonl' || ext === 'txt' || ext === 'xml') {
       setFormat(ext);
@@ -107,6 +266,7 @@ export function DataAcquisitionView({
     const content = await file.text();
     setRawInput(content);
     setImportFeedback(`Loaded file "${file.name}" (${content.length} chars). Click Inspect & Import to validate.`);
+    e.target.value = '';
   };
 
   const handleImportSubmit = (e: React.FormEvent) => {
@@ -194,15 +354,16 @@ export function DataAcquisitionView({
         qParts.push(`name contains '${safe}'`);
       }
       const url = `https://www.googleapis.com/drive/v3/files?pageSize=20&fields=files(id,name,mimeType,modifiedTime)&q=${encodeURIComponent(qParts.join(' and '))}`;
-      const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData?.error?.message || `Drive API returned HTTP ${res.status}`);
+      const result = await safeFetchJson<{ files?: DriveFileItem[]; error?: { message?: string } }>(
+        url,
+        { headers: { Authorization: `Bearer ${token}` } },
+        'Unexpected HTML response from Google Drive API.'
+      );
+      if (!result.ok || !result.data) {
+        const nestedMsg = result.data?.error?.message;
+        throw new Error(nestedMsg || result.error || `Drive API returned HTTP ${result.status}`);
       }
-      const data = await res.json();
-      setDriveFiles(data.files || []);
+      setDriveFiles(result.data.files || []);
     } catch (err) {
       setDriveError(err instanceof Error ? err.message : 'Failed to list Google Drive files.');
     } finally {
@@ -251,16 +412,24 @@ export function DataAcquisitionView({
     setDiscoveryLoading(true);
     setDiscoveryError(null);
     try {
-      const res = await fetch('/api/ai/discover-sources', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: sourceQuery }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Discovery request failed.');
+      const result = await safeFetchJson<{
+        summary?: string;
+        groundingSources?: Array<{ uri: string; title: string }>;
+      }>(
+        '/api/ai/discover-sources',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: sourceQuery }),
+        },
+        'Gemini corpus discovery requires the Express backend server (not available on static hosting).'
+      );
+      if (!result.ok || !result.data) {
+        throw new Error(result.error || 'Discovery request failed.');
+      }
       setDiscoveryResult({
-        summary: data.summary,
-        groundingSources: data.groundingSources || [],
+        summary: result.data.summary || '',
+        groundingSources: result.data.groundingSources || [],
       });
     } catch (err) {
       setDiscoveryError(err instanceof Error ? err.message : 'Source search failed.');
@@ -273,20 +442,25 @@ export function DataAcquisitionView({
     setLabLoading(true);
     setLabError(null);
     try {
-      const res = await fetch('/api/ai/edit-transform', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mode: labDirection === 'ai_generate' ? 'generate' : 'edit',
-          text: labOriginalText,
-          instruction: labInstruction,
-          fast: false,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Transformation failed.');
-      setLabEditedText(data.outputText || '');
-      setLabModelUsed(data.modelUsed || 'gemini-4-hydrogen');
+      const result = await safeFetchJson<{ outputText?: string; modelUsed?: string }>(
+        '/api/ai/edit-transform',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mode: labDirection === 'ai_generate' ? 'generate' : 'edit',
+            text: labOriginalText,
+            instruction: labInstruction,
+            fast: false,
+          }),
+        },
+        'Gemini transformation requires the Express backend server (not available on static hosting).'
+      );
+      if (!result.ok || !result.data) {
+        throw new Error(result.error || 'Transformation failed.');
+      }
+      setLabEditedText(result.data.outputText || '');
+      setLabModelUsed(result.data.modelUsed || 'gemini-4-hydrogen');
     } catch (err) {
       setLabError(err instanceof Error ? err.message : 'Transformation failed.');
     } finally {
@@ -408,7 +582,7 @@ export function DataAcquisitionView({
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div className="space-y-3">
         <div>
           <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-100">
             02. Data Acquisition &amp; Research Center
@@ -418,10 +592,11 @@ export function DataAcquisitionView({
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg">
+        <div className="inline-flex flex-wrap items-center gap-1 p-1 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg max-w-full">
           {(
             [
               ['importer', 'Dataset Importer'],
+              ['export', 'Export to CSV'],
               ['drive', 'Google Drive'],
               ['sources', 'Sources & Jobs'],
               ['editing_lab', 'AI & Editing Lab'],
@@ -449,6 +624,213 @@ export function DataAcquisitionView({
           onSubmit={handleImportSubmit}
           className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-6 space-y-5"
         >
+          {/* Drag-and-Drop Batch CSV Dropzone */}
+          <div
+            data-testid="csv-dropzone"
+            onDragEnter={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setIsDraggingCsv(true);
+            }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setIsDraggingCsv(true);
+            }}
+            onDragLeave={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+                setIsDraggingCsv(false);
+              }
+            }}
+            onDrop={handleCsvDrop}
+            className={`rounded-lg border-2 border-dashed p-5 transition-colors ${
+              isDraggingCsv
+                ? 'border-sky-500 bg-sky-50/70 dark:bg-sky-950/40'
+                : 'border-slate-300 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-950/60'
+            }`}
+          >
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="p-2 rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-sky-600 dark:text-sky-400 shrink-0">
+                  <FileSpreadsheet className="w-5 h-5" />
+                </div>
+                <div className="space-y-1">
+                  <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                    Drag &amp; Drop CSV Files for Batch Import
+                  </h2>
+                  <p className="text-xs text-slate-600 dark:text-slate-400">
+                    Drop one or multiple <span className="font-mono">.csv</span> files with text data (<span className="font-mono">text</span>, <span className="font-mono">content</span>, <span className="font-mono">body</span>, <span className="font-mono">passage</span>, <span className="font-mono">essay</span>, or mapped columns) to inspect schema, check duplicates, and batch-import into the workspace.
+                  </p>
+                </div>
+              </div>
+              <label className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-medium rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer whitespace-nowrap shrink-0">
+                <Upload className="w-3.5 h-3.5" />
+                <span>Select CSV Files</span>
+                <input
+                  type="file"
+                  accept=".csv,text/csv"
+                  multiple
+                  aria-label="Select CSV files for batch import"
+                  onChange={(e) => {
+                    if (e.target.files?.length) {
+                      void ingestCsvFiles(e.target.files);
+                      e.target.value = '';
+                    }
+                  }}
+                  className="sr-only"
+                />
+              </label>
+            </div>
+
+            {csvDropError && (
+              <p role="alert" className="mt-3 text-xs font-medium text-rose-600 dark:text-rose-400">
+                {csvDropError}
+              </p>
+            )}
+          </div>
+
+          {csvBatchPreview && (
+            <div
+              data-testid="csv-batch-staging"
+              className="border border-slate-200 dark:border-slate-800 rounded-lg p-4 space-y-4 bg-slate-50/70 dark:bg-slate-950/60"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                    Staged CSV Batch Queue ({stagedCsvFiles.length} file{stagedCsvFiles.length === 1 ? '' : 's'})
+                  </h3>
+                  <p className="text-xs font-mono text-slate-600 dark:text-slate-400 tabular-nums">
+                    {csvBatchPreview.builtSamples.length} parsed ·{' '}
+                    {csvBatchPreview.builtSamples.length - csvBatchPreview.quarantinedCount} ready ·{' '}
+                    {csvBatchPreview.quarantinedCount} quarantined
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStagedCsvFiles([]);
+                      setCsvColumnMap({});
+                      setCsvDropError(null);
+                    }}
+                    className="px-3 py-1.5 text-xs font-medium rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                  >
+                    Clear Batch
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCommitCsvBatch}
+                    disabled={csvBatchPreview.builtSamples.length === 0}
+                    className="px-3.5 py-1.5 text-xs font-medium rounded-md bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-40 transition-colors"
+                  >
+                    Import Batch ({csvBatchPreview.builtSamples.length} samples) to RAW Layer
+                  </button>
+                </div>
+              </div>
+
+              {csvBatchPreview.errors.length > 0 && (
+                <div role="alert" className="text-xs text-rose-600 dark:text-rose-400 space-y-0.5">
+                  {csvBatchPreview.errors.map((err, i) => (
+                    <p key={i}>{err}</p>
+                  ))}
+                </div>
+              )}
+
+              {csvBatchPreview.detectedColumns.length > 0 && (
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 pt-2 border-t border-slate-200 dark:border-slate-800">
+                  {(
+                    [
+                      ['text', 'Text Column'],
+                      ['origin_class', 'Origin Column'],
+                      ['language', 'Language Column'],
+                      ['domain', 'Domain Column'],
+                      ['origin_model', 'Model Column'],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <div key={key}>
+                      <label
+                        htmlFor={`csv-map-${key}`}
+                        className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1"
+                      >
+                        {label}
+                      </label>
+                      <select
+                        id={`csv-map-${key}`}
+                        value={csvColumnMap[key] ?? ''}
+                        onChange={(e) =>
+                          setCsvColumnMap((prev) => ({
+                            ...prev,
+                            [key]: e.target.value || undefined,
+                          }))
+                        }
+                        className="w-full px-2 py-1 text-xs font-mono rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100"
+                      >
+                        <option value="">Auto-detect</option>
+                        {csvBatchPreview.detectedColumns.map((col) => (
+                          <option key={col} value={col}>
+                            {col}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400">
+                      <th className="py-1.5 pr-3 font-medium">CSV File</th>
+                      <th className="py-1.5 pr-3 font-medium">Detected Columns</th>
+                      <th className="py-1.5 pr-3 font-medium text-right">Rows</th>
+                      <th className="py-1.5 pr-3 font-medium text-right">Valid</th>
+                      <th className="py-1.5 pr-3 font-medium text-right">Quarantined</th>
+                      <th className="py-1.5 text-right font-medium">Remove</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200/70 dark:divide-slate-800">
+                    {csvBatchPreview.fileSummaries.map((fs) => (
+                      <tr key={fs.fileName}>
+                        <td className="py-2 pr-3 font-mono font-medium text-slate-900 dark:text-slate-100">
+                          {fs.fileName}
+                        </td>
+                        <td className="py-2 pr-3 font-mono text-slate-600 dark:text-slate-400">
+                          {fs.detectedColumns.length > 0 ? fs.detectedColumns.join(', ') : '—'}
+                        </td>
+                        <td className="py-2 pr-3 text-right font-mono tabular-nums text-slate-800 dark:text-slate-200">
+                          {fs.rowCount}
+                        </td>
+                        <td className="py-2 pr-3 text-right font-mono tabular-nums text-emerald-700 dark:text-emerald-400">
+                          {fs.validCount}
+                        </td>
+                        <td className="py-2 pr-3 text-right font-mono tabular-nums text-amber-700 dark:text-amber-400">
+                          {fs.quarantinedCount}
+                        </td>
+                        <td className="py-2 text-right">
+                          <button
+                            type="button"
+                            aria-label={`Remove ${fs.fileName}`}
+                            onClick={() =>
+                              setStagedCsvFiles((prev) =>
+                                prev.filter((item) => item.fileName !== fs.fileName)
+                              )
+                            }
+                            className="inline-flex items-center p-1 text-slate-500 hover:text-rose-600 dark:text-slate-400 dark:hover:text-rose-400"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="md:col-span-2">
               <label
@@ -567,6 +949,301 @@ export function DataAcquisitionView({
             </button>
           </div>
         </form>
+      )}
+
+      {tab === 'export' && (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-6 space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+              <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                Filtered Sample Set &amp; CSV Export
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Filter indexed workspace samples by dataset, storage layer, authorship origin, language, or validation status and download as RFC-4180 CSV.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setExportFilter(DEFAULT_EXPORT_FILTER);
+                  setExportFeedback(null);
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Reset Filters</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleExportFilteredCsv}
+                disabled={filteredExportSamples.length === 0}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-md bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-40 transition-colors"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Export to CSV ({filteredExportSamples.length})</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Filter Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+            <div className="lg:col-span-2">
+              <label
+                htmlFor="export-search-query"
+                className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1"
+              >
+                Search Sample Text or ID
+              </label>
+              <input
+                id="export-search-query"
+                type="text"
+                value={exportFilter.searchQuery}
+                onChange={(e) =>
+                  setExportFilter((prev) => ({ ...prev, searchQuery: e.target.value }))
+                }
+                placeholder="Search ID, passage, domain, model..."
+                className="w-full px-3 py-1.5 text-xs rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+              />
+            </div>
+
+            <div>
+              <label
+                htmlFor="export-dataset-filter"
+                className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1"
+              >
+                Dataset
+              </label>
+              <select
+                id="export-dataset-filter"
+                value={exportFilter.datasetKey}
+                onChange={(e) =>
+                  setExportFilter((prev) => ({ ...prev, datasetKey: e.target.value }))
+                }
+                className="w-full px-2.5 py-1.5 text-xs rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+              >
+                <option value="all">All Datasets ({datasets.length})</option>
+                {datasets.map((ds) => (
+                  <option key={ds.dataset_key} value={ds.dataset_key}>
+                    {ds.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label
+                htmlFor="export-layer-filter"
+                className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1"
+              >
+                Storage Layer
+              </label>
+              <select
+                id="export-layer-filter"
+                value={exportFilter.layer}
+                onChange={(e) =>
+                  setExportFilter((prev) => ({
+                    ...prev,
+                    layer: e.target.value as 'all' | StorageLayer,
+                  }))
+                }
+                className="w-full px-2.5 py-1.5 text-xs rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+              >
+                <option value="all">All Layers</option>
+                <option value="raw">RAW</option>
+                <option value="processed">PROCESSED</option>
+                <option value="approved">APPROVED</option>
+              </select>
+            </div>
+
+            <div>
+              <label
+                htmlFor="export-origin-filter"
+                className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1"
+              >
+                Origin Class
+              </label>
+              <select
+                id="export-origin-filter"
+                value={exportFilter.originClass}
+                onChange={(e) =>
+                  setExportFilter((prev) => ({
+                    ...prev,
+                    originClass: e.target.value as 'all' | OriginClass,
+                  }))
+                }
+                className="w-full px-2.5 py-1.5 text-xs rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+              >
+                <option value="all">All Origins</option>
+                <option value="human">Human</option>
+                <option value="ai">AI-Generated</option>
+                <option value="human_edited_ai">Human-Edited AI</option>
+                <option value="ai_edited_human">AI-Edited Human</option>
+                <option value="mixed">Mixed-Origin</option>
+                <option value="unknown">Unknown</option>
+              </select>
+            </div>
+
+            <div>
+              <label
+                htmlFor="export-language-filter"
+                className="block text-[11px] font-medium text-slate-600 dark:text-slate-400 mb-1"
+              >
+                Language
+              </label>
+              <select
+                id="export-language-filter"
+                value={exportFilter.language}
+                onChange={(e) =>
+                  setExportFilter((prev) => ({
+                    ...prev,
+                    language: e.target.value as 'all' | 'en' | 'ar' | 'mixed',
+                  }))
+                }
+                className="w-full px-2.5 py-1.5 text-xs rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+              >
+                <option value="all">All Languages</option>
+                <option value="en">English (EN)</option>
+                <option value="ar">Arabic (AR)</option>
+                <option value="mixed">Mixed</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-4 py-2.5 px-3.5 rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 text-xs">
+            <div className="flex flex-wrap items-center gap-4">
+              <div className="flex items-center gap-2">
+                <label
+                  htmlFor="export-validation-filter"
+                  className="text-slate-600 dark:text-slate-400"
+                >
+                  Validation:
+                </label>
+                <select
+                  id="export-validation-filter"
+                  value={exportFilter.validationStatus}
+                  onChange={(e) =>
+                    setExportFilter((prev) => ({
+                      ...prev,
+                      validationStatus: e.target.value as 'all' | ValidationStatus,
+                    }))
+                  }
+                  className="px-2 py-1 text-xs rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+                >
+                  <option value="all">All Statuses</option>
+                  <option value="verified">Verified</option>
+                  <option value="pending">Pending</option>
+                  <option value="quarantined">Quarantined</option>
+                  <option value="rejected">Rejected</option>
+                </select>
+              </div>
+
+              <label className="inline-flex items-center gap-1.5 text-slate-700 dark:text-slate-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={exportFilter.excludeSyntheticDemo}
+                  onChange={(e) =>
+                    setExportFilter((prev) => ({
+                      ...prev,
+                      excludeSyntheticDemo: e.target.checked,
+                    }))
+                  }
+                  className="rounded border-slate-300 dark:border-slate-700"
+                />
+                <span>Exclude synthetic demo</span>
+              </label>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-4">
+              <label className="inline-flex items-center gap-1.5 text-slate-700 dark:text-slate-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={includeCsvMetadata}
+                  onChange={(e) => setIncludeCsvMetadata(e.target.checked)}
+                  className="rounded border-slate-300 dark:border-slate-700"
+                />
+                <span>Include stylometric metadata</span>
+              </label>
+
+              <label className="inline-flex items-center gap-1.5 text-slate-700 dark:text-slate-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={includeCsvBom}
+                  onChange={(e) => setIncludeCsvBom(e.target.checked)}
+                  className="rounded border-slate-300 dark:border-slate-700"
+                />
+                <span>UTF-8 BOM (Excel-safe)</span>
+              </label>
+            </div>
+          </div>
+
+          {exportFeedback && (
+            <p
+              role="status"
+              className="text-xs font-medium text-emerald-700 dark:text-emerald-400"
+            >
+              {exportFeedback}
+            </p>
+          )}
+
+          <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
+            <span>
+              Showing {filteredExportSamples.length} of {samples.length} total sample(s)
+            </span>
+            <span>Filename: {buildCsvExportFilename(exportFilter)}</span>
+          </div>
+
+          {filteredExportSamples.length === 0 ? (
+            <div className="py-10 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-md">
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                No samples match the active filter criteria. Adjust or reset filters to export rows.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto max-h-[380px] overflow-y-auto border border-slate-200 dark:border-slate-800 rounded-md">
+              <table className="w-full text-left text-xs border-collapse min-w-[700px]">
+                <thead className="sticky top-0 bg-slate-50 dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400">
+                  <tr>
+                    <th className="py-2 px-3 font-medium">Sample ID</th>
+                    <th className="py-2 px-3 font-medium">Layer · Lang</th>
+                    <th className="py-2 px-3 font-medium">Origin</th>
+                    <th className="py-2 px-3 font-medium">Validation</th>
+                    <th className="py-2 px-3 font-medium text-right">Words</th>
+                    <th className="py-2 px-3 font-medium">Passage Preview</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {filteredExportSamples.slice(0, 100).map((s) => (
+                    <tr key={s.sample_id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/30">
+                      <td className="py-2 px-3 font-mono text-slate-900 dark:text-slate-100 whitespace-nowrap">
+                        {s.sample_id}
+                      </td>
+                      <td className="py-2 px-3 font-mono text-slate-600 dark:text-slate-400 whitespace-nowrap uppercase">
+                        {s.layer} · {s.language}
+                      </td>
+                      <td className="py-2 px-3 font-mono text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                        {s.origin.class}
+                      </td>
+                      <td className="py-2 px-3 font-mono text-slate-600 dark:text-slate-400 whitespace-nowrap">
+                        {s.validation.status}
+                      </td>
+                      <td className="py-2 px-3 text-right font-mono tabular-nums text-slate-700 dark:text-slate-300">
+                        {s.linguistic_metrics?.word_count ??
+                          (s.text.trim() ? s.text.trim().split(/\s+/).length : 0)}
+                      </td>
+                      <td
+                        dir="auto"
+                        className="py-2 px-3 text-slate-700 dark:text-slate-300 max-w-md truncate"
+                      >
+                        {s.text}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       )}
 
       {tab === 'drive' && (
@@ -783,47 +1460,130 @@ export function DataAcquisitionView({
             </div>
           </div>
 
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-6 space-y-4">
-            <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-              Scheduled Collection &amp; Validation Jobs
-            </h2>
+          <div
+            data-testid="collection-jobs-monitor"
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-6 space-y-4"
+          >
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                  Collection Job Monitoring
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Live execution status and progress tracking for active data scraping, validation, and batch import jobs.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-xs font-mono tabular-nums">
+                <span className="px-2 py-1 rounded border border-sky-200 dark:border-sky-900 bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300">
+                  {jobsSummary.running} running
+                </span>
+                <span className="px-2 py-1 rounded border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300">
+                  {jobsSummary.completed} completed
+                </span>
+                {jobsSummary.failed > 0 && (
+                  <span className="px-2 py-1 rounded border border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300">
+                    {jobsSummary.failed} failed
+                  </span>
+                )}
+                <span className="px-2 py-1 rounded border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-600 dark:text-slate-400">
+                  {jobsSummary.idle} idle
+                </span>
+              </div>
+            </div>
+
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs border-collapse">
+              <table className="w-full text-left text-xs border-collapse min-w-[700px]">
                 <thead>
                   <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400">
                     <th className="py-2 pr-4 font-medium">Job</th>
                     <th className="py-2 pr-4 font-medium">Method · Cron</th>
-                    <th className="py-2 pr-4 font-medium">Status</th>
+                    <th className="py-2 pr-4 font-medium min-w-[240px]">Progress &amp; Status</th>
                     <th className="py-2 pr-4 font-medium">Next Run</th>
                     <th className="py-2 text-right font-medium">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {jobs.map((job) => (
-                    <tr key={job.job_key}>
-                      <td className="py-2.5 pr-4 font-medium text-slate-900 dark:text-slate-100">
-                        {job.source_name}
-                      </td>
-                      <td className="py-2.5 pr-4 font-mono text-slate-600 dark:text-slate-400">
-                        {job.collection_method} · {job.schedule_cron}
-                      </td>
-                      <td className="py-2.5 pr-4 font-mono text-slate-700 dark:text-slate-300">
-                        {job.execution_status} ({job.imported_records} ok / {job.failed_records} err)
-                      </td>
-                      <td className="py-2.5 pr-4 font-mono tabular-nums text-slate-500 dark:text-slate-400">
-                        {job.next_execution.slice(0, 16).replace('T', ' ')}
-                      </td>
-                      <td className="py-2.5 text-right">
-                        <button
-                          type="button"
-                          onClick={() => onRunCollectionJob(job.job_key)}
-                          className="text-xs font-medium text-sky-700 dark:text-sky-400 hover:underline"
-                        >
-                          Trigger Audit Check
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {jobs.map((job) => {
+                    const progress = computeJobProgress(job);
+                    const badgeClasses =
+                      progress.tone === 'running'
+                        ? 'text-sky-700 dark:text-sky-300 bg-sky-50 dark:bg-sky-950/50 border-sky-200 dark:border-sky-900'
+                        : progress.tone === 'completed'
+                          ? 'text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/50 border-emerald-200 dark:border-emerald-900'
+                          : progress.tone === 'failed'
+                            ? 'text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/50 border-rose-200 dark:border-rose-900'
+                            : 'text-slate-600 dark:text-slate-400 bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800';
+                    const fillClasses =
+                      progress.tone === 'running'
+                        ? 'bg-sky-600 dark:bg-sky-500 animate-pulse'
+                        : progress.tone === 'completed'
+                          ? 'bg-emerald-600 dark:bg-emerald-500'
+                          : progress.tone === 'failed'
+                            ? 'bg-rose-600 dark:bg-rose-500'
+                            : 'bg-slate-400 dark:bg-slate-600';
+
+                    return (
+                      <tr key={job.job_key}>
+                        <td className="py-3 pr-4 align-top">
+                          <p className="font-medium text-slate-900 dark:text-slate-100">
+                            {job.source_name}
+                          </p>
+                          <p className="font-mono text-[11px] text-slate-500 dark:text-slate-400">
+                            {job.job_key} · {job.expected_format}
+                          </p>
+                        </td>
+                        <td className="py-3 pr-4 align-top font-mono text-slate-600 dark:text-slate-400">
+                          {job.collection_method} · {job.schedule_cron}
+                        </td>
+                        <td className="py-3 pr-4 align-top">
+                          <div className="space-y-1.5">
+                            <div className="flex items-center justify-between gap-2">
+                              <span
+                                className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[11px] font-mono font-medium ${badgeClasses}`}
+                              >
+                                {progress.statusLabel}
+                              </span>
+                              <span className="font-mono text-[11px] tabular-nums text-slate-700 dark:text-slate-300">
+                                {progress.percent}%
+                              </span>
+                            </div>
+                            <div
+                              role="progressbar"
+                              aria-label={`${job.source_name} progress`}
+                              aria-valuenow={progress.percent}
+                              aria-valuemin={0}
+                              aria-valuemax={100}
+                              className="h-2 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden"
+                            >
+                              <div
+                                className={`h-full rounded-full transition-all duration-300 ${fillClasses}`}
+                                style={{ width: `${progress.percent}%` }}
+                              />
+                            </div>
+                            <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+                              <span className="truncate">{progress.stageLabel}</span>
+                              <span className="font-mono tabular-nums shrink-0">
+                                {job.imported_records} ok / {job.failed_records} flagged
+                              </span>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="py-3 pr-4 align-top font-mono tabular-nums text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                          {job.next_execution.slice(0, 16).replace('T', ' ')}
+                        </td>
+                        <td className="py-3 align-top text-right whitespace-nowrap">
+                          <button
+                            type="button"
+                            disabled={job.execution_status === 'running'}
+                            onClick={() => onRunCollectionJob(job.job_key)}
+                            className="px-2.5 py-1 text-xs font-medium rounded border border-slate-300 dark:border-slate-700 text-sky-700 dark:text-sky-400 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50"
+                          >
+                            {job.execution_status === 'running' ? 'Running...' : 'Trigger Audit Check'}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

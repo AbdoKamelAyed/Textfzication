@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 import {
   Activity,
@@ -31,6 +31,8 @@ import { ReportsAndCopilotView } from './components/ReportsAndCopilotView';
 import { ResearchDashboard, type ModuleId } from './components/ResearchDashboard';
 import { TrainingAndExperimentsView } from './components/TrainingAndExperimentsView';
 import { VisualIntelligenceView } from './components/VisualIntelligenceView';
+import { applyBulkSampleValidation } from './engine/bulkValidation';
+import { createImportCollectionJob } from './engine/collectionJobs';
 import {
   DEMO_DATASETS,
   DEMO_SAMPLES,
@@ -77,6 +79,8 @@ import {
   loadWorkspaceFromIndexedDb,
   saveWorkspaceToIndexedDb,
 } from './storage/indexedDb';
+import { resolveApiUrl } from './lib/apiBase';
+import { safeFetchJson } from './lib/safeFetchJson';
 
 const NAV_GROUPS: Array<{
   heading: string;
@@ -116,7 +120,7 @@ const NAV_GROUPS: Array<{
     items: [
       { id: 'reports', label: '12. Reports & Analytics', icon: Sparkles },
       { id: 'copilot', label: '13. AI Research Copilot', icon: Bot },
-      { id: 'governance', label: '14. Governance & Settings', icon: Settings },
+      { id: 'governance', label: '14. Admin & Governance', icon: Settings },
     ],
   },
 ];
@@ -153,6 +157,15 @@ export default function App() {
     geminiConfigured: boolean;
     sqlConfigured: boolean;
   } | null>(null);
+  const jobTimersRef = useRef<number[]>([]);
+
+  useEffect(() => {
+    return () => {
+      for (const timerId of jobTimersRef.current) {
+        window.clearTimeout(timerId);
+      }
+    };
+  }, []);
 
   // Apply Tailwind v4 dark class
   useEffect(() => {
@@ -171,12 +184,18 @@ export default function App() {
       const [idbData, fsOk, healthRes, corpusRes] = await Promise.all([
         loadWorkspaceFromIndexedDb(),
         testFirestoreConnection(),
-        fetch('/api/health')
-          .then((r) => (r.ok ? r.json() : null))
-          .catch(() => null),
-        fetch('/api/corpus')
-          .then((r) => (r.ok ? r.json() : null))
-          .catch(() => null),
+        safeFetchJson<{ ok: boolean; geminiConfigured: boolean; sqlConfigured: boolean }>('/api/health').then((r) =>
+          r.ok ? r.data : null
+        ),
+        safeFetchJson<{
+          datasets?: DatasetRecord[];
+          samples?: TextSample[];
+          patterns?: WritingPattern[];
+          experiments?: ExperimentRecord[];
+          sources?: ExternalSource[];
+          jobs?: CollectionJob[];
+          auditLogs?: AuditEvent[];
+        }>('/api/corpus').then((r) => (r.ok ? r.data : null)),
       ]);
 
       if (!active) return;
@@ -234,7 +253,7 @@ export default function App() {
         getFreshIdToken()
           .then((token) => {
             if (!token) return;
-            fetch('/api/auth/sync', {
+            fetch(resolveApiUrl('/api/auth/sync'), {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
@@ -300,6 +319,8 @@ export default function App() {
       return exists ? prev : [dataset, ...prev];
     });
     setSamples((prev) => [...newSamples, ...prev]);
+    const importJob = createImportCollectionJob(dataset, newSamples);
+    setJobs((prev) => [importJob, ...prev].slice(0, 20));
     appendAudit(
       'IMPORT_SAMPLES',
       'dataset',
@@ -311,16 +332,19 @@ export default function App() {
       syncDatasetAndSampleToFirestore(user, dataset, newSamples[0]).catch(() => {});
       const idToken = await getFreshIdToken().catch(() => null);
       if (idToken) {
-        fetch('/api/db/datasets', {
+        fetch(resolveApiUrl('/api/db/datasets'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
           body: JSON.stringify({ dataset }),
         }).catch(() => {});
-        fetch('/api/db/samples', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-          body: JSON.stringify({ samples: newSamples }),
-        }).catch(() => {});
+        for (let i = 0; i < newSamples.length; i += 200) {
+          const chunk = newSamples.slice(i, i + 200);
+          fetch(resolveApiUrl('/api/db/samples'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+            body: JSON.stringify({ samples: chunk }),
+          }).catch(() => {});
+        }
       }
     }
   };
@@ -356,11 +380,46 @@ export default function App() {
     if (user) {
       const idToken = await getFreshIdToken().catch(() => null);
       if (idToken) {
-        fetch(`/api/db/samples/${encodeURIComponent(sampleId)}/validate`, {
+        fetch(resolveApiUrl(`/api/db/samples/${encodeURIComponent(sampleId)}/validate`), {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
           body: JSON.stringify({ status, layer, note }),
         }).catch(() => {});
+      }
+    }
+  };
+
+  const handleBulkValidateSamples = async (
+    sampleIds: string[],
+    status: ValidationStatus,
+    layer: StorageLayer,
+    note: string
+  ) => {
+    const cleanIds = Array.from(new Set(sampleIds.map((id) => id.trim()).filter(Boolean)));
+    if (cleanIds.length === 0) return;
+
+    setSamples((prev) => applyBulkSampleValidation(prev, cleanIds, status, layer, note).nextSamples);
+
+    const preview = cleanIds.slice(0, 4).join(', ');
+    const suffix = cleanIds.length > 4 ? ` +${cleanIds.length - 4} more` : '';
+    appendAudit(
+      'BULK_VALIDATE_SAMPLES',
+      'sample_batch',
+      `${cleanIds.length} sample(s)`,
+      `Bulk marked ${cleanIds.length} sample(s) (${preview}${suffix}) as ${status} in ${layer} layer (${note}).`
+    );
+
+    if (user) {
+      const idToken = await getFreshIdToken().catch(() => null);
+      if (idToken) {
+        for (let i = 0; i < cleanIds.length; i += 500) {
+          const chunk = cleanIds.slice(i, i + 500);
+          fetch(resolveApiUrl('/api/db/samples/bulk-validate'), {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+            body: JSON.stringify({ sampleIds: chunk, status, layer, note }),
+          }).catch(() => {});
+        }
       }
     }
   };
@@ -389,7 +448,7 @@ export default function App() {
     if (user) {
       const idToken = await getFreshIdToken().catch(() => null);
       if (idToken) {
-        fetch('/api/db/experiments', {
+        fetch(resolveApiUrl('/api/db/experiments'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
           body: JSON.stringify({ experiment: exp }),
@@ -399,24 +458,72 @@ export default function App() {
   };
 
   const handleRunCollectionJob = (jobKey: string) => {
-    const now = new Date().toISOString();
+    const totalTarget = Math.max(1, samples.length);
+    const flaggedCount = samples.filter(
+      (s) => s.validation.status === 'quarantined' || s.validation.status === 'rejected'
+    ).length;
+    const validCount = Math.max(0, samples.length - flaggedCount);
+
     setJobs((prev) =>
       prev.map((j) =>
         j.job_key === jobKey
           ? {
               ...j,
-              execution_status: 'completed',
-              last_execution: now,
+              execution_status: 'running',
+              progress_percent: 25,
+              target_records: totalTarget,
+              imported_records: 0,
+              failed_records: 0,
+              error_log: null,
+              current_stage: 'Fetching manifest & scanning corpus schema...',
             }
           : j
       )
     );
-    appendAudit(
-      'CHECK_COLLECTION_JOB',
-      'job',
-      jobKey,
-      `Verified collection job configuration and schedule readiness (${jobKey}).`
-    );
+
+    const t1 = window.setTimeout(() => {
+      const midImported = Math.ceil(validCount * 0.65);
+      setJobs((prev) =>
+        prev.map((j) =>
+          j.job_key === jobKey && j.execution_status === 'running'
+            ? {
+                ...j,
+                progress_percent: 68,
+                imported_records: midImported,
+                current_stage: 'Checking normalized hashes & provenance...',
+              }
+            : j
+        )
+      );
+    }, 450);
+
+    const t2 = window.setTimeout(() => {
+      const now = new Date().toISOString();
+      setJobs((prev) =>
+        prev.map((j) =>
+          j.job_key === jobKey
+            ? {
+                ...j,
+                execution_status: 'completed',
+                progress_percent: 100,
+                target_records: totalTarget,
+                imported_records: validCount,
+                failed_records: flaggedCount,
+                current_stage: `Verified ${validCount} ok · ${flaggedCount} flagged`,
+                last_execution: now,
+              }
+            : j
+        )
+      );
+      appendAudit(
+        'CHECK_COLLECTION_JOB',
+        'job',
+        jobKey,
+        `Completed collection audit (${jobKey}): ${validCount} ok, ${flaggedCount} flagged.`
+      );
+    }, 950);
+
+    jobTimersRef.current.push(t1, t2);
   };
 
   const handleResetDemoWorkspace = () => {
@@ -441,7 +548,7 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex">
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex overflow-x-hidden">
         {/* Desktop Sidebar */}
         <aside className="hidden lg:flex lg:w-64 lg:flex-col lg:fixed lg:inset-y-0 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
           <div className="h-14 px-5 flex items-center justify-between border-b border-slate-200 dark:border-slate-800">
@@ -599,7 +706,7 @@ export default function App() {
             </div>
           )}
 
-          <main className="flex-1 p-4 sm:p-6 max-w-7xl w-full mx-auto">
+          <main className="flex-1 p-4 sm:p-6 max-w-7xl w-full mx-auto min-w-0">
             {activeModule === 'dashboard' && (
               <ResearchDashboard
                 datasets={datasets}
@@ -622,6 +729,7 @@ export default function App() {
                 onSignIn={handleSignIn}
                 onImportSamples={handleImportSamples}
                 onRunCollectionJob={handleRunCollectionJob}
+                onLogAudit={appendAudit}
               />
             )}
 
@@ -630,6 +738,7 @@ export default function App() {
                 datasets={datasets}
                 samples={samples}
                 onValidateSample={handleValidateSample}
+                onBulkValidateSamples={handleBulkValidateSamples}
               />
             )}
 
@@ -685,6 +794,7 @@ export default function App() {
 
             {activeModule === 'governance' && (
               <GovernanceAndSettingsView
+                user={user}
                 datasets={datasets}
                 samples={samples}
                 patterns={patterns}
@@ -698,6 +808,8 @@ export default function App() {
                 onToggleTheme={() => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))}
                 onResetDemoWorkspace={handleResetDemoWorkspace}
                 onClearIndexedDb={handleClearIndexedDb}
+                onSignIn={handleSignIn}
+                onLogAudit={appendAudit}
               />
             )}
           </main>

@@ -39,15 +39,27 @@ service cloud.firestore {
 
     function isValidUserProfile(data, userId) {
       return data.keys().hasAll(['uid', 'email', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'email', 'displayName', 'theme', 'preferredLanguage', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'theme', 'preferredLanguage', 'role', 'status', 'createdAt', 'updatedAt'])
         && isValidId(data.uid)
         && data.uid == userId
         && data.email is string && data.email.size() >= 3 && data.email.size() <= 256
         && (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 120))
         && (!('theme' in data) || (data.theme in ['light', 'dark']))
         && (!('preferredLanguage' in data) || (data.preferredLanguage in ['en', 'ar']))
+        && (!('role' in data) || (data.role in ['researcher', 'reviewer', 'admin']))
+        && (!('status' in data) || (data.status in ['active', 'suspended']))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
+    }
+
+    function isValidAdminRecord(data, adminId) {
+      return data.keys().hasAll(['uid', 'email'])
+        && data.keys().hasOnly(['uid', 'email', 'grantedBy', 'createdAt'])
+        && isValidId(data.uid)
+        && data.uid == adminId
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 256
+        && (!('grantedBy' in data) || isValidId(data.grantedBy))
+        && (!('createdAt' in data) || data.createdAt is timestamp);
     }
 
     function isValidResearchDataset(data, userId, datasetId) {
@@ -120,15 +132,28 @@ service cloud.firestore {
 
     match /admins/{adminId} {
       allow get: if isValidId(adminId) && (isOwner(adminId) || isAdmin());
-      allow list, create, update, delete: if false;
+      allow list: if isAdmin() && resource.data.uid is string;
+      allow create: if isValidId(adminId)
+        && isAdmin()
+        && isValidAdminRecord(incoming(), adminId)
+        && incoming().createdAt == request.time;
+      allow update: if isValidId(adminId)
+        && isAdmin()
+        && isValidAdminRecord(incoming(), adminId)
+        && incoming().uid == existing().uid;
+      allow delete: if isValidId(adminId) && isAdmin() && adminId != request.auth.uid;
     }
 
     match /users/{userId} {
       allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
-      allow list: if isAdmin();
+      allow list: if isAdmin() && resource.data.uid is string;
       allow create: if isValidId(userId)
         && (isOwner(userId) || isAdmin())
         && isValidUserProfile(incoming(), userId)
+        && (isAdmin() || (
+          (!('role' in incoming()) || incoming().role == 'researcher')
+          && (!('status' in incoming()) || incoming().status == 'active')
+        ))
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
       allow update: if isValidId(userId)
@@ -138,7 +163,7 @@ service cloud.firestore {
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
-          isAdmin()
+          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'theme', 'preferredLanguage', 'role', 'status', 'updatedAt']))
           || incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'theme', 'preferredLanguage', 'updatedAt'])
         );
       allow delete: if isValidId(userId) && isAdmin();

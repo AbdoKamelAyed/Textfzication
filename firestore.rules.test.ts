@@ -36,3 +36,10 @@ test('firestore.rules never uses blanket isSignedIn() list rules or JSON stringi
   assert.equal(/allow\s+list:\s*if\s+isSignedIn\(\)\s*;/.test(rules), false);
   assert.equal(/allow\s+read:\s*if\s+isSignedIn\(\)\s*;/.test(rules), false);
 });
+
+test('firestore.rules enforces RBAC role escalation protection and admin self-delete guard', () => {
+  assert.match(rules, /adminId\s*!=\s*request\.auth\.uid/);
+  assert.match(rules, /incoming\(\)\.role\s*==\s*'researcher'/);
+  assert.match(rules, /incoming\(\)\.status\s*==\s*'active'/);
+  assert.match(rules, /isValidAdminRecord/);
+});

@@ -1,5 +1,6 @@
 import express from 'express';
 import dotenv from 'dotenv';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
@@ -7,6 +8,7 @@ import { requireAuth, optionalAuth, type AuthRequest } from './src/middleware/au
 import { getOrCreateUser } from './src/db/users.ts';
 import { isSqlAvailable } from './src/db/index.ts';
 import {
+  bulkUpdateSampleValidation,
   createDatasetRecord,
   createSampleRecords,
   fetchCorpusSnapshot,
@@ -23,6 +25,32 @@ const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json({ limit: '4mb' }));
+
+// Allow static-hosted frontends (Firebase Hosting / GitHub Pages) to connect when configured
+app.use('/api', (req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  }
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  next();
+});
+
+function readFirebaseConfigStatus(): boolean {
+  try {
+    const rawCfg = JSON.parse(
+      fs.readFileSync(path.join(__dirname, 'firebase-applet-config.json'), 'utf8')
+    ) as { projectId?: string; firestoreDatabaseId?: string };
+    return Boolean(rawCfg.projectId && rawCfg.firestoreDatabaseId);
+  } catch {
+    return false;
+  }
+}
 
 function getGeminiClient(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -46,6 +74,63 @@ app.get('/api/health', async (_req, res) => {
     service: 'TEXTPRINT',
     geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
     sqlConfigured: await isSqlAvailable(),
+    firebaseConfigured: readFirebaseConfigStatus(),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// System & Deployment Status endpoint (non-secret runtime telemetry)
+app.get('/api/system/status', async (_req, res) => {
+  let firebaseMeta = {
+    projectId: '',
+    firestoreDatabaseId: '',
+    authDomain: '',
+  };
+  try {
+    const rawCfg = JSON.parse(
+      fs.readFileSync(path.join(__dirname, 'firebase-applet-config.json'), 'utf8')
+    ) as { projectId?: string; firestoreDatabaseId?: string; authDomain?: string };
+    firebaseMeta = {
+      projectId: rawCfg.projectId ?? '',
+      firestoreDatabaseId: rawCfg.firestoreDatabaseId ?? '',
+      authDomain: rawCfg.authDomain ?? '',
+    };
+  } catch {
+    // Fallback if config unavailable
+  }
+
+  const distBuilt = fs.existsSync(path.join(__dirname, 'dist', 'index.html'));
+  const workflows = [
+    '.github/workflows/ci-validate.yml',
+    '.github/workflows/deploy-pages.yml',
+    '.github/workflows/deploy-firebase-dev.yml',
+  ].map((wf) => ({
+    path: wf,
+    exists: fs.existsSync(path.join(__dirname, wf)),
+  }));
+
+  res.json({
+    ok: true,
+    service: 'TEXTPRINT',
+    nodeVersion: process.version,
+    environment: process.env.NODE_ENV || 'development',
+    port: PORT,
+    uptimeSeconds: Math.floor(process.uptime()),
+    memoryMb: Math.round(process.memoryUsage().rss / 1048576),
+    geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
+    sql: {
+      available: await isSqlAvailable(),
+      socketPathConfigured: Boolean(process.env.SQL_HOST),
+    },
+    firebase: firebaseMeta,
+    deployment: {
+      mode: process.env.NODE_ENV === 'production' ? 'cloud_run_production' : 'dev_server',
+      distBuilt,
+      firebaseJsonPresent: fs.existsSync(path.join(__dirname, 'firebase.json')),
+      firestoreRulesPresent: fs.existsSync(path.join(__dirname, 'firestore.rules')),
+      workflows,
+    },
+    timestamp: new Date().toISOString(),
   });
 });
 
@@ -107,6 +192,48 @@ app.post('/api/db/samples', requireAuth, async (req: AuthRequest, res) => {
   } catch (error) {
     console.error('Sample batch create error:', error);
     res.status(500).json({ error: 'Failed to persist samples.' });
+  }
+});
+
+app.patch('/api/db/samples/bulk-validate', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const rawIds = req.body?.sampleIds;
+    const status = req.body?.status;
+    const layer = req.body?.layer;
+    const note = String(req.body?.note || 'Bulk validated by researcher').slice(0, 500);
+
+    if (!Array.isArray(rawIds) || rawIds.length === 0) {
+      return res.status(400).json({ error: 'sampleIds array is required.' });
+    }
+    if (rawIds.length > 500) {
+      return res.status(400).json({ error: 'Bulk validation batch limited to 500 samples.' });
+    }
+    const sampleIds = rawIds
+      .filter((id): id is string => typeof id === 'string')
+      .map((id) => id.trim())
+      .filter(Boolean);
+
+    if (sampleIds.length === 0) {
+      return res.status(400).json({ error: 'No valid sampleIds provided.' });
+    }
+    if (!['pending', 'verified', 'rejected', 'quarantined'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid validation status.' });
+    }
+    if (!['raw', 'processed', 'approved'].includes(layer)) {
+      return res.status(400).json({ error: 'Invalid storage layer.' });
+    }
+
+    const result = await bulkUpdateSampleValidation(
+      sampleIds,
+      status,
+      layer,
+      note,
+      req.user!.uid
+    );
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    console.error('Bulk sample validation error:', error);
+    res.status(500).json({ error: 'Failed to bulk update sample validation.' });
   }
 });
 
@@ -323,6 +450,25 @@ app.post('/api/ai/discover-sources', optionalAuth, async (req: AuthRequest, res)
     });
   }
 });
+
+// Ensure unmatched /api/* routes and middleware errors always return JSON, never HTML
+app.all('/api/*', (_req, res) => {
+  res.status(404).json({ error: 'API route not found.' });
+});
+
+app.use(
+  '/api',
+  (
+    err: { status?: number; message?: string },
+    _req: express.Request,
+    res: express.Response,
+    _next: express.NextFunction
+  ) => {
+    res.status(err.status || 400).json({
+      error: err.message || 'Invalid API request.',
+    });
+  }
+);
 
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
