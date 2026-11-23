@@ -1,5 +1,5 @@
-import { analyzeTextLinguistics, detectLanguageAndDialect, normalizeUnicodeText } from './linguistic';
-import type { OriginClass, TextSample, ValidationStatus } from './types';
+import { analyzeTextLinguistics, detectLanguageAndDialect, normalizeUnicodeText } from './linguistic.ts';
+import type { OriginClass, TextSample, ValidationStatus } from './types.ts';
 
 export interface SampleValidationReport {
   sample_id: string;

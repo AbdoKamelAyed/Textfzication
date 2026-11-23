@@ -1,5 +1,5 @@
-import { analyzeTextLinguistics, normalizeUnicodeText } from './linguistic';
-import { computeContentHash } from './validation';
+import { analyzeTextLinguistics, normalizeUnicodeText } from './linguistic.ts';
+import { computeContentHash } from './validation.ts';
 import type {
   CollectionJob,
   DatasetRecord,
@@ -7,7 +7,7 @@ import type {
   ExternalSource,
   TextSample,
   WritingPattern,
-} from './types';
+} from './types.ts';
 
 export const RESEARCH_CORPUS_TARGETS = {
   total: 3000,
