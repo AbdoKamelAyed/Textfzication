@@ -1,0 +1,250 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated researcher profile and workspace preferences.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 256
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "theme": {
+          "type": "string",
+          "enum": ["light", "dark"]
+        },
+        "preferredLanguage": {
+          "type": "string",
+          "enum": ["en", "ar"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "email", "createdAt", "updatedAt"]
+    },
+    "ResearchDataset": {
+      "title": "ResearchDataset",
+      "description": "Metadata for a researcher's synced TEXTPRINT corpus dataset.",
+      "type": "object",
+      "properties": {
+        "datasetKey": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "layer": {
+          "type": "string",
+          "enum": ["raw", "processed", "approved"]
+        },
+        "version": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "license": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "isSyntheticDemo": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "datasetKey",
+        "ownerUid",
+        "name",
+        "layer",
+        "version",
+        "license",
+        "isSyntheticDemo",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "WritingSample": {
+      "title": "WritingSample",
+      "description": "Synced writing sample with provenance, origin classification, and validation status.",
+      "type": "object",
+      "properties": {
+        "sampleId": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "datasetKey": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20000
+        },
+        "language": {
+          "type": "string",
+          "maxLength": 16
+        },
+        "domain": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "originClass": {
+          "type": "string",
+          "enum": ["human", "ai", "human_edited_ai", "ai_edited_human", "mixed", "unknown"]
+        },
+        "validationStatus": {
+          "type": "string",
+          "enum": ["pending", "verified", "rejected", "quarantined"]
+        },
+        "verified": {
+          "type": "boolean"
+        },
+        "isSyntheticDemo": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "sampleId",
+        "ownerUid",
+        "datasetKey",
+        "text",
+        "language",
+        "originClass",
+        "validationStatus",
+        "verified",
+        "isSyntheticDemo",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ResearchNote": {
+      "title": "ResearchNote",
+      "description": "Saved linguistic hypothesis, copilot summary, or annotation.",
+      "type": "object",
+      "properties": {
+        "noteId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 15000
+        },
+        "tags": {
+          "type": "array"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["noteId", "ownerUid", "title", "content", "createdAt", "updatedAt"]
+    },
+    "AdminRecord": {
+      "title": "AdminRecord",
+      "description": "Trusted administrator marker document.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 256
+        }
+      },
+      "required": ["uid", "email"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private researcher profile isolated to owner or verified admin."
+    },
+    "/users/{userId}/datasets/{datasetId}": {
+      "schema": { "$ref": "#/entities/ResearchDataset" },
+      "description": "User-owned research dataset metadata synced across sessions."
+    },
+    "/users/{userId}/samples/{sampleId}": {
+      "schema": { "$ref": "#/entities/WritingSample" },
+      "description": "User-owned writing samples synced to Firestore."
+    },
+    "/users/{userId}/notes/{noteId}": {
+      "schema": { "$ref": "#/entities/ResearchNote" },
+      "description": "User-owned research annotations and saved copilot notes."
+    },
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/AdminRecord" },
+      "description": "Trusted admin allowlist documents."
+    }
+  }
+}

@@ -1,0 +1,708 @@
+import { useEffect, useState } from 'react';
+import type { User } from 'firebase/auth';
+import {
+  Activity,
+  BarChart3,
+  Bot,
+  Database,
+  FileSearch,
+  FlaskConical,
+  GitCompare,
+  Layers,
+  LayoutDashboard,
+  Menu,
+  Moon,
+  Network,
+  Radar,
+  Settings,
+  ShieldCheck,
+  Sparkles,
+  Sun,
+  X,
+} from 'lucide-react';
+import { AiAnalysisAndCompareView } from './components/AiAnalysisAndCompareView';
+import { DataAcquisitionView } from './components/DataAcquisitionView';
+import { DatasetManagementView } from './components/DatasetManagementView';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { GoogleSignInButton } from './components/GoogleSignInButton';
+import { GovernanceAndSettingsView } from './components/GovernanceAndSettingsView';
+import { LinguisticAndStylometryView } from './components/LinguisticAndStylometryView';
+import { ReportsAndCopilotView } from './components/ReportsAndCopilotView';
+import { ResearchDashboard, type ModuleId } from './components/ResearchDashboard';
+import { TrainingAndExperimentsView } from './components/TrainingAndExperimentsView';
+import { VisualIntelligenceView } from './components/VisualIntelligenceView';
+import {
+  DEMO_DATASETS,
+  DEMO_SAMPLES,
+  INITIAL_COLLECTION_JOBS,
+  INITIAL_EXPERIMENTS,
+  INITIAL_EXTERNAL_SOURCES,
+  INITIAL_PATTERNS,
+} from './engine/demoCorpus';
+
+const INITIAL_AUDIT_LOGS: AuditEvent[] = [
+  {
+    id: 'aud_init_001',
+    timestamp: '2026-11-20T15:00:00Z',
+    actor: 'system',
+    action: 'INIT_DEMO_CORPUS',
+    target_type: 'dataset',
+    target_id: 'tx-demo-multilingual-v1',
+    details: 'Initialized 7 labeled synthetic demonstration samples across EN and AR.',
+  },
+];
+import type {
+  AuditEvent,
+  CollectionJob,
+  DatasetRecord,
+  ExperimentRecord,
+  ExternalSource,
+  PatternStatus,
+  StorageLayer,
+  TextSample,
+  ValidationStatus,
+  WritingPattern,
+} from './engine/types';
+import {
+  getFreshIdToken,
+  signInWithGoogle,
+  signOutGoogle,
+  subscribeAuth,
+  syncDatasetAndSampleToFirestore,
+  syncUserProfileToFirestore,
+  testFirestoreConnection,
+} from './lib/firebase';
+import {
+  clearAllIndexedDbData,
+  loadWorkspaceFromIndexedDb,
+  saveWorkspaceToIndexedDb,
+} from './storage/indexedDb';
+
+const NAV_GROUPS: Array<{
+  heading: string;
+  items: Array<{ id: ModuleId; label: string; icon: React.ComponentType<{ className?: string }> }>;
+}> = [
+  {
+    heading: 'Overview',
+    items: [{ id: 'dashboard', label: '01. Research Dashboard', icon: LayoutDashboard }],
+  },
+  {
+    heading: 'Corpus & Quality',
+    items: [
+      { id: 'acquisition', label: '02. Data Acquisition', icon: Database },
+      { id: 'datasets', label: '03. Dataset Management', icon: Layers },
+    ],
+  },
+  {
+    heading: 'Stylometry & Analysis',
+    items: [
+      { id: 'linguistic', label: '04. Linguistic Engine', icon: FileSearch },
+      { id: 'patterns', label: '05. Writing Patterns', icon: Activity },
+      { id: 'stylometry', label: '06. Stylometric Profiles', icon: Radar },
+      { id: 'ai_analysis', label: '07. AI Text Analysis', icon: ShieldCheck },
+      { id: 'compare', label: '08. Comparative Lab', icon: GitCompare },
+    ],
+  },
+  {
+    heading: 'Modeling & Visuals',
+    items: [
+      { id: 'training', label: '09. Training & Eval', icon: FlaskConical },
+      { id: 'visuals', label: '10. Knowledge Graph', icon: Network },
+      { id: 'experiments', label: '11. Experiments', icon: BarChart3 },
+    ],
+  },
+  {
+    heading: 'Reports & Governance',
+    items: [
+      { id: 'reports', label: '12. Reports & Analytics', icon: Sparkles },
+      { id: 'copilot', label: '13. AI Research Copilot', icon: Bot },
+      { id: 'governance', label: '14. Governance & Settings', icon: Settings },
+    ],
+  },
+];
+
+export default function App() {
+  const [activeModule, setActiveModule] = useState<ModuleId>('dashboard');
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = window.localStorage.getItem('textprint_theme');
+      if (saved === 'dark' || saved === 'light') return saved;
+    }
+    return 'light';
+  });
+
+  // Core Workspace State
+  const [datasets, setDatasets] = useState<DatasetRecord[]>(DEMO_DATASETS);
+  const [samples, setSamples] = useState<TextSample[]>(DEMO_SAMPLES);
+  const [patterns, setPatterns] = useState<WritingPattern[]>(INITIAL_PATTERNS);
+  const [experiments, setExperiments] = useState<ExperimentRecord[]>(INITIAL_EXPERIMENTS);
+  const [sources, setSources] = useState<ExternalSource[]>(INITIAL_EXTERNAL_SOURCES);
+  const [jobs, setJobs] = useState<CollectionJob[]>(INITIAL_COLLECTION_JOBS);
+  const [auditLogs, setAuditLogs] = useState<AuditEvent[]>(INITIAL_AUDIT_LOGS);
+  const [hydrated, setHydrated] = useState(false);
+
+  // Auth & Runtime State
+  const [user, setUser] = useState<User | null>(null);
+  const [hasDriveToken, setHasDriveToken] = useState(false);
+  const [isSigningIn, setIsSigningIn] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [firestoreConnected, setFirestoreConnected] = useState<boolean | null>(null);
+  const [serverHealth, setServerHealth] = useState<{
+    ok: boolean;
+    geminiConfigured: boolean;
+    sqlConfigured: boolean;
+  } | null>(null);
+
+  // Apply Tailwind v4 dark class
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', theme === 'dark');
+    try {
+      window.localStorage.setItem('textprint_theme', theme);
+    } catch {
+      // Ignore storage quota restrictions
+    }
+  }, [theme]);
+
+  // Hydrate from IndexedDB & Server Corpus on Startup
+  useEffect(() => {
+    let active = true;
+    async function bootstrap() {
+      const [idbData, fsOk, healthRes, corpusRes] = await Promise.all([
+        loadWorkspaceFromIndexedDb(),
+        testFirestoreConnection(),
+        fetch('/api/health')
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null),
+        fetch('/api/corpus')
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null),
+      ]);
+
+      if (!active) return;
+      setFirestoreConnected(fsOk);
+      if (healthRes) setServerHealth(healthRes);
+
+      if (idbData && idbData.samples.length > 0) {
+        setDatasets(idbData.datasets);
+        setSamples(idbData.samples);
+        if (idbData.patterns.length > 0) setPatterns(idbData.patterns);
+        if (idbData.experiments.length > 0) setExperiments(idbData.experiments);
+        if (idbData.sources.length > 0) setSources(idbData.sources);
+        if (idbData.jobs.length > 0) setJobs(idbData.jobs);
+        if (idbData.auditLogs.length > 0) setAuditLogs(idbData.auditLogs);
+      } else if (corpusRes && Array.isArray(corpusRes.samples) && corpusRes.samples.length > 0) {
+        setDatasets(corpusRes.datasets ?? DEMO_DATASETS);
+        setSamples(corpusRes.samples);
+        setPatterns(corpusRes.patterns ?? INITIAL_PATTERNS);
+        setExperiments(corpusRes.experiments ?? INITIAL_EXPERIMENTS);
+        setSources(corpusRes.sources ?? INITIAL_EXTERNAL_SOURCES);
+        setJobs(corpusRes.jobs ?? INITIAL_COLLECTION_JOBS);
+        setAuditLogs(corpusRes.auditLogs ?? INITIAL_AUDIT_LOGS);
+      }
+      setHydrated(true);
+    }
+    bootstrap();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Persist workspace changes to IndexedDB
+  useEffect(() => {
+    if (!hydrated) return;
+    saveWorkspaceToIndexedDb({
+      datasets,
+      samples,
+      patterns,
+      experiments,
+      sources,
+      jobs,
+      auditLogs,
+    }).catch(() => {
+      // IndexedDB may be disabled in private browsing contexts
+    });
+  }, [hydrated, datasets, samples, patterns, experiments, sources, jobs, auditLogs]);
+
+  // Subscribe to Firebase Auth state
+  useEffect(() => {
+    return subscribeAuth((authUser, driveReady) => {
+      setUser(authUser);
+      setHasDriveToken(driveReady);
+      if (authUser) {
+        syncUserProfileToFirestore(authUser, theme).catch(() => {});
+        getFreshIdToken()
+          .then((token) => {
+            if (!token) return;
+            fetch('/api/auth/sync', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`,
+              },
+            }).catch(() => {});
+          })
+          .catch(() => {});
+      }
+    });
+  }, []);
+
+  const appendAudit = (
+    action: string,
+    targetType: string,
+    targetId: string,
+    details: string
+  ) => {
+    const event: AuditEvent = {
+      id: `aud_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+      timestamp: new Date().toISOString(),
+      actor: user?.email || 'local-researcher',
+      action,
+      target_type: targetType,
+      target_id: targetId,
+      details,
+    };
+    setAuditLogs((prev) => [event, ...prev].slice(0, 150));
+  };
+
+  const handleSignIn = async () => {
+    setIsSigningIn(true);
+    setAuthError(null);
+    try {
+      const { user: signedUser, accessToken } = await signInWithGoogle();
+      setUser(signedUser);
+      setHasDriveToken(Boolean(accessToken));
+      appendAudit(
+        'RESEARCHER_SIGN_IN',
+        'auth',
+        signedUser.uid,
+        `Authenticated ${signedUser.email || 'researcher'} with Firebase & Google Drive.`
+      );
+    } catch (err) {
+      setAuthError(
+        err instanceof Error ? err.message : 'Google Sign-In was cancelled or failed.'
+      );
+    } finally {
+      setIsSigningIn(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    await signOutGoogle();
+    setUser(null);
+    setHasDriveToken(false);
+    appendAudit('RESEARCHER_SIGN_OUT', 'auth', 'session', 'Signed out of cloud session.');
+  };
+
+  const handleImportSamples = async (dataset: DatasetRecord, newSamples: TextSample[]) => {
+    setDatasets((prev) => {
+      const exists = prev.some((d) => d.dataset_key === dataset.dataset_key);
+      return exists ? prev : [dataset, ...prev];
+    });
+    setSamples((prev) => [...newSamples, ...prev]);
+    appendAudit(
+      'IMPORT_SAMPLES',
+      'dataset',
+      dataset.dataset_key,
+      `Imported ${newSamples.length} records into ${dataset.name} (${dataset.layer}).`
+    );
+
+    if (user) {
+      syncDatasetAndSampleToFirestore(user, dataset, newSamples[0]).catch(() => {});
+      const idToken = await getFreshIdToken().catch(() => null);
+      if (idToken) {
+        fetch('/api/db/datasets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+          body: JSON.stringify({ dataset }),
+        }).catch(() => {});
+        fetch('/api/db/samples', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+          body: JSON.stringify({ samples: newSamples }),
+        }).catch(() => {});
+      }
+    }
+  };
+
+  const handleValidateSample = async (
+    sampleId: string,
+    status: ValidationStatus,
+    layer: StorageLayer,
+    note: string
+  ) => {
+    setSamples((prev) =>
+      prev.map((s) =>
+        s.sample_id === sampleId
+          ? {
+              ...s,
+              layer,
+              validation: {
+                status,
+                verified: status === 'verified',
+                validation_notes: [...s.validation.validation_notes, note],
+              },
+            }
+          : s
+      )
+    );
+    appendAudit(
+      'VALIDATE_SAMPLE',
+      'sample',
+      sampleId,
+      `Marked ${sampleId} as ${status} in ${layer} layer (${note}).`
+    );
+
+    if (user) {
+      const idToken = await getFreshIdToken().catch(() => null);
+      if (idToken) {
+        fetch(`/api/db/samples/${encodeURIComponent(sampleId)}/validate`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+          body: JSON.stringify({ status, layer, note }),
+        }).catch(() => {});
+      }
+    }
+  };
+
+  const handleUpdatePatternStatus = (patternId: string, nextStatus: PatternStatus) => {
+    setPatterns((prev) =>
+      prev.map((p) => (p.pattern_id === patternId ? { ...p, validation_status: nextStatus } : p))
+    );
+    appendAudit(
+      'UPDATE_PATTERN_STATUS',
+      'pattern',
+      patternId,
+      `Transitioned writing pattern ${patternId} to ${nextStatus}.`
+    );
+  };
+
+  const handleRecordExperiment = async (exp: ExperimentRecord) => {
+    setExperiments((prev) => [exp, ...prev]);
+    appendAudit(
+      'RECORD_EXPERIMENT',
+      'experiment',
+      exp.experiment_key,
+      `Executed ${exp.name} (${exp.split_strategy}) · F1 ${(exp.metrics.f1_score * 100).toFixed(1)}%.`
+    );
+
+    if (user) {
+      const idToken = await getFreshIdToken().catch(() => null);
+      if (idToken) {
+        fetch('/api/db/experiments', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+          body: JSON.stringify({ experiment: exp }),
+        }).catch(() => {});
+      }
+    }
+  };
+
+  const handleRunCollectionJob = (jobKey: string) => {
+    const now = new Date().toISOString();
+    setJobs((prev) =>
+      prev.map((j) =>
+        j.job_key === jobKey
+          ? {
+              ...j,
+              execution_status: 'completed',
+              last_execution: now,
+            }
+          : j
+      )
+    );
+    appendAudit(
+      'CHECK_COLLECTION_JOB',
+      'job',
+      jobKey,
+      `Verified collection job configuration and schedule readiness (${jobKey}).`
+    );
+  };
+
+  const handleResetDemoWorkspace = () => {
+    setDatasets(DEMO_DATASETS);
+    setSamples(DEMO_SAMPLES);
+    setPatterns(INITIAL_PATTERNS);
+    setExperiments(INITIAL_EXPERIMENTS);
+    setSources(INITIAL_EXTERNAL_SOURCES);
+    setJobs(INITIAL_COLLECTION_JOBS);
+    setAuditLogs(INITIAL_AUDIT_LOGS);
+    appendAudit('RESET_DEMO_CORPUS', 'workspace', 'demo', 'Restored baseline synthetic demonstration corpus.');
+  };
+
+  const handleClearIndexedDb = async () => {
+    await clearAllIndexedDbData();
+    appendAudit('CLEAR_INDEXEDDB', 'storage', 'indexeddb', 'Cleared local browser IndexedDB stores.');
+  };
+
+  const activeNavLabel =
+    NAV_GROUPS.flatMap((g) => g.items).find((item) => item.id === activeModule)?.label ??
+    'TEXTPRINT Laboratory';
+
+  return (
+    <ErrorBoundary>
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex">
+        {/* Desktop Sidebar */}
+        <aside className="hidden lg:flex lg:w-64 lg:flex-col lg:fixed lg:inset-y-0 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+          <div className="h-14 px-5 flex items-center justify-between border-b border-slate-200 dark:border-slate-800">
+            <div>
+              <span className="font-mono text-sm font-semibold tracking-tight text-slate-900 dark:text-slate-50">
+                TEXTPRINT
+              </span>
+              <span className="ml-2 text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                v1.4
+              </span>
+            </div>
+          </div>
+
+          <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5" aria-label="Laboratory Modules">
+            {NAV_GROUPS.map((group) => (
+              <div key={group.heading} className="space-y-1">
+                <p className="px-2.5 text-[11px] font-medium uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                  {group.heading}
+                </p>
+                {group.items.map((item) => {
+                  const Icon = item.icon;
+                  const active = activeModule === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => setActiveModule(item.id)}
+                      className={`w-full flex items-center gap-2.5 px-2.5 py-2 text-xs rounded-md transition-colors text-left ${
+                        active
+                          ? 'bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300 font-medium'
+                          : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/70'
+                      }`}
+                    >
+                      <Icon className="w-4 h-4 shrink-0" />
+                      <span className="truncate">{item.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </nav>
+
+          <div className="p-3 border-t border-slate-200 dark:border-slate-800 text-[11px] text-slate-500 dark:text-slate-400 font-mono">
+            {samples.length} indexed · {samples.filter((s) => !s.is_synthetic_demo).length} research
+          </div>
+        </aside>
+
+        {/* Mobile Drawer */}
+        {mobileNavOpen && (
+          <div className="fixed inset-0 z-40 lg:hidden flex">
+            <div
+              className="fixed inset-0 bg-slate-950/50"
+              onClick={() => setMobileNavOpen(false)}
+            />
+            <aside className="relative w-72 max-w-[82vw] bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col z-50">
+              <div className="h-14 px-4 flex items-center justify-between border-b border-slate-200 dark:border-slate-800">
+                <span className="font-mono text-sm font-semibold">TEXTPRINT</span>
+                <button
+                  type="button"
+                  onClick={() => setMobileNavOpen(false)}
+                  aria-label="Close navigation menu"
+                  className="p-1.5 rounded-md text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5">
+                {NAV_GROUPS.map((group) => (
+                  <div key={group.heading} className="space-y-1">
+                    <p className="px-2.5 text-[11px] font-medium uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                      {group.heading}
+                    </p>
+                    {group.items.map((item) => {
+                      const Icon = item.icon;
+                      const active = activeModule === item.id;
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => {
+                            setActiveModule(item.id);
+                            setMobileNavOpen(false);
+                          }}
+                          className={`w-full flex items-center gap-2.5 px-2.5 py-2 text-xs rounded-md transition-colors text-left ${
+                            active
+                              ? 'bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300 font-medium'
+                              : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/70'
+                          }`}
+                        >
+                          <Icon className="w-4 h-4 shrink-0" />
+                          <span className="truncate">{item.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ))}
+              </nav>
+            </aside>
+          </div>
+        )}
+
+        {/* Main Content Area */}
+        <div className="flex-1 lg:pl-64 flex flex-col min-w-0">
+          <header className="h-14 sticky top-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur border-b border-slate-200 dark:border-slate-800 px-4 sm:px-6 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <button
+                type="button"
+                onClick={() => setMobileNavOpen(true)}
+                aria-label="Open navigation menu"
+                className="lg:hidden p-1.5 rounded-md border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300"
+              >
+                <Menu className="w-4 h-4" />
+              </button>
+              <span className="text-xs font-mono text-slate-500 dark:text-slate-400 truncate">
+                <span className="sm:hidden font-semibold text-slate-800 dark:text-slate-200">TEXTPRINT</span>
+                <span className="hidden sm:inline">TEXTPRINT / {activeNavLabel}</span>
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))}
+                aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              >
+                {theme === 'dark' ? (
+                  <Sun className="w-3.5 h-3.5" />
+                ) : (
+                  <Moon className="w-3.5 h-3.5" />
+                )}
+                <span className="hidden sm:inline">{theme === 'dark' ? 'Light' : 'Dark'}</span>
+              </button>
+
+              <GoogleSignInButton
+                user={user}
+                hasDriveToken={hasDriveToken}
+                isSigningIn={isSigningIn}
+                onSignIn={handleSignIn}
+                onSignOut={handleSignOut}
+              />
+            </div>
+          </header>
+
+          {authError && (
+            <div className="mx-4 sm:mx-6 mt-4 px-4 py-2.5 text-xs text-rose-700 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 rounded-md flex items-center justify-between gap-2">
+              <span>{authError}</span>
+              <button
+                type="button"
+                onClick={() => setAuthError(null)}
+                className="underline shrink-0"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+
+          <main className="flex-1 p-4 sm:p-6 max-w-7xl w-full mx-auto">
+            {activeModule === 'dashboard' && (
+              <ResearchDashboard
+                datasets={datasets}
+                samples={samples}
+                patterns={patterns}
+                experiments={experiments}
+                jobs={jobs}
+                auditLogs={auditLogs}
+                onNavigate={setActiveModule}
+              />
+            )}
+
+            {activeModule === 'acquisition' && (
+              <DataAcquisitionView
+                datasets={datasets}
+                samples={samples}
+                sources={sources}
+                jobs={jobs}
+                hasDriveToken={hasDriveToken}
+                onSignIn={handleSignIn}
+                onImportSamples={handleImportSamples}
+                onRunCollectionJob={handleRunCollectionJob}
+              />
+            )}
+
+            {activeModule === 'datasets' && (
+              <DatasetManagementView
+                datasets={datasets}
+                samples={samples}
+                onValidateSample={handleValidateSample}
+              />
+            )}
+
+            {(activeModule === 'linguistic' ||
+              activeModule === 'patterns' ||
+              activeModule === 'stylometry') && (
+              <LinguisticAndStylometryView
+                initialSubView={activeModule}
+                samples={samples}
+                patterns={patterns}
+                onUpdatePatternStatus={handleUpdatePatternStatus}
+              />
+            )}
+
+            {(activeModule === 'ai_analysis' || activeModule === 'compare') && (
+              <AiAnalysisAndCompareView
+                initialSubView={activeModule}
+                samples={samples}
+              />
+            )}
+
+            {(activeModule === 'training' || activeModule === 'experiments') && (
+              <TrainingAndExperimentsView
+                datasets={datasets}
+                samples={samples}
+                experiments={experiments}
+                onRecordExperiment={handleRecordExperiment}
+              />
+            )}
+
+            {activeModule === 'visuals' && (
+              <VisualIntelligenceView
+                datasets={datasets}
+                samples={samples}
+                patterns={patterns}
+                experiments={experiments}
+              />
+            )}
+
+            {(activeModule === 'reports' || activeModule === 'copilot') && (
+              <ReportsAndCopilotView
+                initialSubView={activeModule}
+                datasets={datasets}
+                samples={samples}
+                patterns={patterns}
+                experiments={experiments}
+                user={user}
+                hasDriveToken={hasDriveToken}
+                onSignIn={handleSignIn}
+                onLogAudit={appendAudit}
+              />
+            )}
+
+            {activeModule === 'governance' && (
+              <GovernanceAndSettingsView
+                datasets={datasets}
+                samples={samples}
+                patterns={patterns}
+                experiments={experiments}
+                sources={sources}
+                jobs={jobs}
+                auditLogs={auditLogs}
+                firestoreConnected={firestoreConnected}
+                serverHealth={serverHealth}
+                theme={theme}
+                onToggleTheme={() => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))}
+                onResetDemoWorkspace={handleResetDemoWorkspace}
+                onClearIndexedDb={handleClearIndexedDb}
+              />
+            )}
+          </main>
+        </div>
+      </div>
+    </ErrorBoundary>
+  );
+}
