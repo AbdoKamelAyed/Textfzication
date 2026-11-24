@@ -187,15 +187,15 @@ export function GovernanceStatusMonitor({
   return (
     <section
       aria-label="Real-time service connectivity monitor"
-      className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4"
+      className="min-w-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4 overflow-hidden"
     >
       {/* Header & Polling Controls */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-        <div className="flex items-start gap-2.5">
-          <div className="mt-0.5 p-1.5 rounded-md bg-sky-50 dark:bg-sky-950/50 border border-sky-200 dark:border-sky-900 text-sky-700 dark:text-sky-400">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 min-w-0">
+        <div className="flex items-start gap-2.5 min-w-0">
+          <div className="mt-0.5 p-1.5 rounded-md bg-sky-50 dark:bg-sky-950/50 border border-sky-200 dark:border-sky-900 text-sky-700 dark:text-sky-400 shrink-0">
             <Activity className="w-4 h-4" />
           </div>
-          <div>
+          <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
                 Real-Time Connectivity Monitor
@@ -220,7 +220,7 @@ export function GovernanceStatusMonitor({
                 </span>
               </span>
             </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
+            <p className="text-xs text-slate-500 dark:text-slate-400 break-words">
               Pings <span className="font-mono">GET /api/health</span> &amp; Firestore server probe
               {configuredOrigin ? ` via ${configuredOrigin}` : ' (same-origin)'}
               {lastCheckedAt ? ` · Last check ${lastCheckedAt.slice(11, 19)} UTC` : ''}
@@ -228,7 +228,7 @@ export function GovernanceStatusMonitor({
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
           <select
             aria-label="Health ping interval"
             value={intervalMs}
@@ -283,18 +283,18 @@ export function GovernanceStatusMonitor({
             <div
               key={item.id}
               data-testid={`connectivity-card-${item.id}`}
-              className={`rounded-md border ${vis.cardBorderClass} bg-slate-50/70 dark:bg-slate-950/60 p-3.5 space-y-2`}
+              className={`min-w-0 rounded-md border ${vis.cardBorderClass} bg-slate-50/70 dark:bg-slate-950/60 p-3.5 space-y-2`}
             >
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
                   <Icon className="w-4 h-4 text-slate-600 dark:text-slate-400 shrink-0" />
-                  <span className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+                  <span className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
                     {item.label}
                   </span>
                 </div>
 
                 <span
-                  className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-mono font-medium rounded border ${vis.badgeClass}`}
+                  className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-mono font-medium rounded border shrink-0 ${vis.badgeClass}`}
                 >
                   <span
                     aria-hidden="true"
@@ -306,7 +306,7 @@ export function GovernanceStatusMonitor({
                 </span>
               </div>
 
-              <div className="flex items-center justify-between gap-2 text-[11px]">
+              <div className="flex items-center justify-between gap-2 text-[11px] min-w-0">
                 <span className="text-slate-600 dark:text-slate-400 truncate">
                   {item.detail}
                 </span>
@@ -323,11 +323,11 @@ export function GovernanceStatusMonitor({
       {(isStaticFallback || showOriginForm) && (
         <div className="rounded-md border border-amber-200 dark:border-amber-900/70 bg-amber-50/70 dark:bg-amber-950/25 p-3.5 space-y-2.5 text-xs">
           {isStaticFallback && (
-            <p className="text-amber-800 dark:text-amber-300">
+            <p className="text-amber-800 dark:text-amber-300 break-words">
               Static hosting detected: Firebase Hosting / GitHub Pages serve client assets only, so Deep Thinking Gemini analysis, AI Copilot, and Cloud SQL require an Express backend (<span className="font-mono">node server.ts</span> on Cloud Run). Attach your Cloud Run Express URL below or open the Cloud Run app URL directly.
             </p>
           )}
-          <form onSubmit={handleSaveOrigin} className="flex flex-col sm:flex-row gap-2">
+          <form onSubmit={handleSaveOrigin} className="flex flex-col sm:flex-row gap-2 min-w-0">
             <input
               type="url"
               aria-label="Express backend server URL"

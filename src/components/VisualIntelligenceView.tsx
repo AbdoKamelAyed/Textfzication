@@ -3,6 +3,7 @@ import * as d3 from 'd3';
 import { Download, RotateCcw, ZoomIn, ZoomOut } from 'lucide-react';
 import { buildKnowledgeGraphFromCorpus } from '../engine/knowledgeGraph';
 import { analyzeTextLinguistics, FEATURE_CATALOG } from '../engine/linguistic';
+import { useI18n } from '../lib/i18nContext';
 import type {
   DatasetRecord,
   ExperimentRecord,
@@ -36,6 +37,8 @@ export function VisualIntelligenceView({
   patterns,
   experiments,
 }: Props) {
+  const { lang } = useI18n();
+  const isAr = lang === 'ar';
   const [mode, setMode] = useState<DiagramMode>('knowledge_graph');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -283,24 +286,28 @@ export function VisualIntelligenceView({
   }, [samples]);
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-100">
-            10. Knowledge Graph &amp; Visual Intelligence Engine
+    <div className="space-y-6 min-w-0">
+      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 min-w-0">
+        <div className="min-w-0">
+          <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-100 break-words">
+            {isAr
+              ? '10. الرسم المعرفي ومحرك الذكاء البصري'
+              : '10. Knowledge Graph & Visual Intelligence Engine'}
           </h1>
-          <p className="text-sm text-slate-600 dark:text-slate-400">
-            Interactive data-driven visualizations generated strictly from live corpus records, provenance links, and measured metrics.
+          <p className="text-sm text-slate-600 dark:text-slate-400 break-words">
+            {isAr
+              ? 'تصورات تفاعلية مبنية حصرياً من سجلات المدونة الحية وروابط الإسناد والمقاييس الفعلية.'
+              : 'Interactive data-driven visualizations generated strictly from live corpus records, provenance links, and measured metrics.'}
           </p>
         </div>
 
-        <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shrink-0 overflow-x-auto max-w-full">
+        <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shrink-0 max-w-full">
           {(
             [
-              ['knowledge_graph', 'Knowledge Graph'],
-              ['feature_tree', 'Feature Tree'],
-              ['pipeline_flow', 'Pipeline Flow'],
-              ['metric_chart', 'Metric Plot'],
+              ['knowledge_graph', isAr ? 'الرسم المعرفي' : 'Knowledge Graph'],
+              ['feature_tree', isAr ? 'شجرة الخصائص' : 'Feature Tree'],
+              ['pipeline_flow', isAr ? 'مسار المعالجة' : 'Pipeline Flow'],
+              ['metric_chart', isAr ? 'مخطط المقاييس' : 'Metric Plot'],
             ] as const
           ).map(([id, label]) => (
             <button
@@ -413,7 +420,7 @@ export function VisualIntelligenceView({
 
       {mode === 'knowledge_graph' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <div className="lg:col-span-8 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-3">
+          <div className="lg:col-span-8 min-w-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-3">
             <svg
               ref={svgRef}
               data-testid="knowledge-graph-svg"
@@ -434,7 +441,7 @@ export function VisualIntelligenceView({
             </div>
           </div>
 
-          <div className="lg:col-span-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-3">
+          <div className="lg:col-span-4 min-w-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-3">
             <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
               Node &amp; Provenance Inspector
             </h2>

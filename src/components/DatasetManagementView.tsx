@@ -22,6 +22,7 @@ import type {
   ValidationStatus,
 } from '../engine/types';
 import { validateSampleQuality } from '../engine/validation';
+import { useI18n } from '../lib/i18nContext';
 
 interface Props {
   datasets: DatasetRecord[];
@@ -43,6 +44,8 @@ export function DatasetManagementView({
   onValidateSample,
   onBulkValidateSamples,
 }: Props) {
+  const { lang } = useI18n();
+  const isAr = lang === 'ar';
   const [filter, setFilter] = useState<DatasetManagementFilter>(DEFAULT_DATASET_FILTER);
   const [selectedId, setSelectedId] = useState<string>(samples[0]?.sample_id ?? '');
   const [selectedSampleIds, setSelectedSampleIds] = useState<Set<string>>(() => new Set());
@@ -99,18 +102,22 @@ export function DatasetManagementView({
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-100">
-            03. Dataset Management &amp; Quality Governance
+    <div className="space-y-6 min-w-0">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 min-w-0">
+        <div className="min-w-0">
+          <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-100 break-words">
+            {isAr
+              ? '03. إدارة المدونات وحوكمة الجودة'
+              : '03. Dataset Management & Quality Governance'}
           </h1>
-          <p className="text-sm text-slate-600 dark:text-slate-400">
-            Separate Raw, Processed, and Approved layers with duplicate, contamination, encoding, and label consistency checks.
+          <p className="text-sm text-slate-600 dark:text-slate-400 break-words">
+            {isAr
+              ? 'فصل الطبقات الخام والمعالَجة والمعتمدة مع فحوصات التكرار والتلوث والترميز واتساق التسميات.'
+              : 'Separate Raw, Processed, and Approved layers with duplicate, contamination, encoding, and label consistency checks.'}
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg">
+        <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg max-w-full shrink-0">
           {(['all', 'raw', 'processed', 'approved'] as const).map((layer) => (
             <button
               key={layer}
@@ -122,7 +129,7 @@ export function DatasetManagementView({
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
               }`}
             >
-              {layer === 'all' ? `All (${samples.length})` : `${layer} (${samples.filter((s) => s.layer === layer).length})`}
+              {layer === 'all' ? `${isAr ? 'الكل' : 'All'} (${samples.length})` : `${layer} (${samples.filter((s) => s.layer === layer).length})`}
             </button>
           ))}
         </div>
@@ -131,28 +138,32 @@ export function DatasetManagementView({
       {/* Global Search & Filter Bar */}
       <section
         aria-label="Global sample search and filter bar"
-        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 space-y-3"
+        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 space-y-3 min-w-0"
       >
-        <div className="flex flex-col sm:flex-row gap-2.5">
+        <div className="flex flex-col sm:flex-row gap-2.5 min-w-0">
           <div className="relative flex-1 min-w-0">
             <Search
               aria-hidden="true"
-              className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
+              className="w-4 h-4 text-slate-400 absolute start-3 top-1/2 -translate-y-1/2 pointer-events-none"
             />
             <input
               type="text"
               value={filter.query}
               onChange={(e) => setFilter((prev) => ({ ...prev, query: e.target.value }))}
-              placeholder="Search by sample ID (TX-...), provenance (dataset, license, source, model, author), or content keyword..."
+              placeholder={
+                isAr
+                  ? 'ابحث بمعرّف العينة (TX-...) أو المصدر أو النموذج أو كلمة من النص...'
+                  : 'Search by sample ID (TX-...), provenance (dataset, license, source, model, author), or content keyword...'
+              }
               aria-label="Global search by ID, provenance, or content keyword"
-              className="w-full pl-9 pr-8 py-2 text-xs rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+              className="w-full ps-9 pe-8 py-2 text-xs rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
             />
             {filter.query && (
               <button
                 type="button"
                 aria-label="Clear search query"
                 onClick={() => setFilter((prev) => ({ ...prev, query: '' }))}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                className="absolute end-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
@@ -422,7 +433,7 @@ export function DatasetManagementView({
 
       {/* Sample Browser + Inspector Split */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <div className="lg:col-span-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 space-y-3">
+        <div className="lg:col-span-6 min-w-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs pb-2 border-b border-slate-100 dark:border-slate-800">
             <div className="flex items-center gap-2.5">
               <label className="inline-flex items-center gap-2 cursor-pointer select-none text-slate-700 dark:text-slate-300">
@@ -439,7 +450,7 @@ export function DatasetManagementView({
                   className="h-4 w-4 rounded border-slate-300 dark:border-slate-700 text-sky-600 focus:ring-sky-500 cursor-pointer disabled:opacity-40"
                 />
                 <span className="font-semibold text-slate-900 dark:text-slate-100">
-                  Sample Directory ({filtered.length})
+                  {isAr ? `دليل العينات (${filtered.length})` : `Sample Directory (${filtered.length})`}
                 </span>
               </label>
             </div>
@@ -452,7 +463,9 @@ export function DatasetManagementView({
 
           {filtered.length === 0 ? (
             <p className="py-8 text-center text-xs text-slate-500 dark:text-slate-400">
-              No samples match the current global search and filter criteria.
+              {isAr
+                ? 'لا توجد عينات تطابق معايير البحث والترشيح الحالية.'
+                : 'No samples match the current global search and filter criteria.'}
             </p>
           ) : (
             <div className="divide-y divide-slate-100 dark:divide-slate-800 max-h-[540px] overflow-y-auto">
@@ -462,7 +475,7 @@ export function DatasetManagementView({
                 return (
                   <div
                     key={s.sample_id}
-                    className={`flex items-start gap-3 p-3 transition-colors ${
+                    className={`flex items-start gap-3 p-3 transition-colors min-w-0 ${
                       isSelected
                         ? 'bg-sky-50 dark:bg-sky-950/40'
                         : isChecked
@@ -483,10 +496,10 @@ export function DatasetManagementView({
                     <button
                       type="button"
                       onClick={() => setSelectedId(s.sample_id)}
-                      className="flex-1 min-w-0 text-left"
+                      className="flex-1 min-w-0 text-start"
                     >
-                      <div className="flex items-center justify-between gap-2 text-xs">
-                        <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <span className="font-mono font-semibold text-slate-900 dark:text-slate-100 break-all">
                           {s.sample_id}
                         </span>
                         <span className="font-mono text-[11px] text-slate-500 dark:text-slate-400">
@@ -502,7 +515,7 @@ export function DatasetManagementView({
                       </p>
                       <p
                         dir={s.language === 'ar' ? 'rtl' : 'ltr'}
-                        className="mt-1 text-xs text-slate-600 dark:text-slate-400 line-clamp-2"
+                        className="mt-1 text-xs text-slate-600 dark:text-slate-400 line-clamp-2 break-words"
                       >
                         {s.text}
                       </p>
@@ -514,7 +527,7 @@ export function DatasetManagementView({
           )}
         </div>
 
-        <div className="lg:col-span-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4">
+        <div className="lg:col-span-6 min-w-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4">
           {!selected ? (
             <p className="text-xs text-slate-500 dark:text-slate-400">
               Select a sample from the list to inspect its metadata, quality report, and text.

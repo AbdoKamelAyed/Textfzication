@@ -42,6 +42,7 @@ import {
   type FirestoreUserRecord,
 } from '../lib/firebase';
 import { safeFetchJson } from '../lib/safeFetchJson';
+import { useI18n } from '../lib/i18nContext';
 import { GovernanceStatusMonitor } from './GovernanceStatusMonitor';
 import type { HealthEndpointPayload } from '../engine/connectivityMonitor';
 
@@ -117,6 +118,8 @@ export function GovernanceAndSettingsView({
   onSignIn,
   onLogAudit,
 }: Props) {
+  const { lang } = useI18n();
+  const isAr = lang === 'ar';
   const [section, setSection] = useState<AdminSection>('system');
   const [docTab, setDocTab] = useState<DocTab>('architecture');
   const [anonymizeAuthors, setAnonymizeAuthors] = useState(true);
@@ -368,14 +371,18 @@ export function GovernanceAndSettingsView({
   );
 
   return (
-    <div className="space-y-6">
-      <div className="space-y-3">
-        <div>
-          <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-100">
-            14. Admin Control Center &amp; System Governance
+    <div className="space-y-6 min-w-0">
+      <div className="space-y-3 min-w-0">
+        <div className="min-w-0">
+          <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-100 break-words">
+            {isAr
+              ? '14. مركز التحكم الإداري وحوكمة النظام'
+              : '14. Admin Control Center & System Governance'}
           </h1>
-          <p className="text-sm text-slate-600 dark:text-slate-400">
-            Separation of responsibility (RBAC), user access administration, multi-store database diagnostics, and live deployment status.
+          <p className="text-sm text-slate-600 dark:text-slate-400 break-words">
+            {isAr
+              ? 'فصل الصلاحيات (RBAC)، وإدارة حسابات المستخدمين، وتشخيص قواعد البيانات المتعددة، وحالة النشر المباشر.'
+              : 'Separation of responsibility (RBAC), user access administration, multi-store database diagnostics, and live deployment status.'}
           </p>
         </div>
 
@@ -386,11 +393,11 @@ export function GovernanceAndSettingsView({
         >
           {(
             [
-              ['system', 'System & Responsibility'],
-              ['users', 'Users & Roles'],
-              ['database', 'Database Manager'],
-              ['deployment', 'Deployment Status'],
-              ['audit', 'Audit & Docs'],
+              ['system', isAr ? 'النظام والمسؤوليات' : 'System & Responsibility'],
+              ['users', isAr ? 'المستخدمون والأدوار' : 'Users & Roles'],
+              ['database', isAr ? 'مدير قواعد البيانات' : 'Database Manager'],
+              ['deployment', isAr ? 'حالة النشر' : 'Deployment Status'],
+              ['audit', isAr ? 'التدقيق والتوثيق' : 'Audit & Docs'],
             ] as const
           ).map(([id, label]) => (
             <button

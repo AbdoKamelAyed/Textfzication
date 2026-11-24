@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { runControlledTrainingExperiment } from '../engine/training';
+import { useI18n } from '../lib/i18nContext';
 import type {
   DatasetRecord,
   ExperimentRecord,
@@ -19,6 +20,8 @@ export function TrainingAndExperimentsView({
   experiments,
   onRecordExperiment,
 }: Props) {
+  const { lang } = useI18n();
+  const isAr = lang === 'ar';
   const [name, setName] = useState('Multilingual Calibration Experiment');
   const [hypothesis, setHypothesis] = useState(
     'Grouped source splitting prevents data leakage across human and LLM-generated English/Arabic subsets.'
@@ -62,20 +65,24 @@ export function TrainingAndExperimentsView({
   };
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-100">
-          09 &amp; 11. Model Training, Evaluation &amp; Experiments
+    <div className="space-y-6 min-w-0">
+      <div className="min-w-0">
+        <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-100 break-words">
+          {isAr
+            ? '09 و 11. تدريب النماذج والتقييم والتجارب'
+            : '09 & 11. Model Training, Evaluation & Experiments'}
         </h1>
-        <p className="text-sm text-slate-600 dark:text-slate-400">
-          Leakage-safe grouped splits, strict exploratory gating for unverified records, and calibrated multi-metric evaluation.
+        <p className="text-sm text-slate-600 dark:text-slate-400 break-words">
+          {isAr
+            ? 'تقسيمات مجمّعة مانعة للتسرب وبوابة صارمة للعينات الاستكشافية غير الموثّقة ومقاييس معايرة متعددة.'
+            : 'Leakage-safe grouped splits, strict exploratory gating for unverified records, and calibrated multi-metric evaluation.'}
         </p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         <form
           onSubmit={handleRunTraining}
-          className="lg:col-span-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4"
+          className="lg:col-span-5 min-w-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4"
         >
           <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
             Define Controlled Training Run
@@ -206,7 +213,7 @@ export function TrainingAndExperimentsView({
           </button>
         </form>
 
-        <div className="lg:col-span-7 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-5">
+        <div className="lg:col-span-7 min-w-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-5">
           {!activeExp ? (
             <p className="text-xs text-slate-500 dark:text-slate-400">
               No experiments recorded yet. Configure and run an evaluation on the left.

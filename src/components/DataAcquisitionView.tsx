@@ -18,6 +18,10 @@ import {
   serializeSamplesToCsv,
   type SampleExportFilter,
 } from '../engine/csvExport';
+import {
+  generateLocalEditTransform,
+  generateLocalSourceDiscoveryReply,
+} from '../engine/copilotFallback';
 import { detectLanguageAndDialect } from '../engine/linguistic';
 import type {
   CollectionJob,
@@ -37,6 +41,7 @@ import {
   type CsvColumnMapping,
 } from '../engine/validation';
 import { getInMemoryDriveToken } from '../lib/firebase';
+import { useI18n } from '../lib/i18nContext';
 import { safeFetchJson } from '../lib/safeFetchJson';
 
 interface Props {
@@ -71,6 +76,7 @@ export function DataAcquisitionView({
   onRunCollectionJob,
   onLogAudit,
 }: Props) {
+  const { lang } = useI18n();
   const [tab, setTab] = useState<AcquisitionTab>('importer');
 
   // Importer state
@@ -422,9 +428,19 @@ export function DataAcquisitionView({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ query: sourceQuery }),
         },
-        'Gemini corpus discovery requires the Express backend server (not available on static hosting).'
+        'Express backend not attached — using verified local source registry.'
       );
       if (!result.ok || !result.data) {
+        if (result.isHtmlFallback || result.status === 0 || result.status >= 500) {
+          const localRes = generateLocalSourceDiscoveryReply(sourceQuery, sources, lang);
+          setDiscoveryResult(localRes);
+          setDiscoveryError(
+            lang === 'ar'
+              ? 'الوضع الساكن: تم البحث محلياً في سجل المصادر البحثية الموثقة (لتفعيل البحث السحابي اربط خادم Cloud Run من شاشة 14).'
+              : 'Static hosting fallback: showing results from your verified local academic source registry (attach a Cloud Run URL in 14. Admin & Governance for live Google Search Grounding).'
+          );
+          return;
+        }
         throw new Error(result.error || 'Discovery request failed.');
       }
       setDiscoveryResult({
@@ -454,9 +470,24 @@ export function DataAcquisitionView({
             fast: false,
           }),
         },
-        'Gemini transformation requires the Express backend server (not available on static hosting).'
+        'Express backend not attached — running local deterministic editing transform.'
       );
       if (!result.ok || !result.data) {
+        if (result.isHtmlFallback || result.status === 0 || result.status >= 500) {
+          const localOut = generateLocalEditTransform({
+            mode: labDirection === 'ai_generate' ? 'generate' : 'edit',
+            text: labOriginalText,
+            instruction: labInstruction,
+          });
+          setLabEditedText(localOut.outputText);
+          setLabModelUsed(localOut.modelUsed);
+          setLabError(
+            lang === 'ar'
+              ? 'الوضع الساكن: تم تطبيق المحوّل اللغوي الحتمي محلياً (لتشغيل Gemini السحابي اربط خادم Cloud Run من شاشة 14).'
+              : 'Static hosting fallback: applied local deterministic editing rules (attach a Cloud Run URL in 14. Admin & Governance for live Gemini transformation).'
+          );
+          return;
+        }
         throw new Error(result.error || 'Transformation failed.');
       }
       setLabEditedText(result.data.outputText || '');
@@ -581,26 +612,30 @@ export function DataAcquisitionView({
       : null;
 
   return (
-    <div className="space-y-6">
-      <div className="space-y-3">
-        <div>
-          <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-100">
-            02. Data Acquisition &amp; Research Center
+    <div className="space-y-6 min-w-0">
+      <div className="space-y-3 min-w-0">
+        <div className="min-w-0">
+          <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-100 break-words">
+            {lang === 'ar'
+              ? '02. استقطاب البيانات ومركز الأبحاث'
+              : '02. Data Acquisition & Research Center'}
           </h1>
-          <p className="text-sm text-slate-600 dark:text-slate-400">
-            Acquire, inspect, validate, and register datasets from local files, Google Drive, external registries, and controlled editing experiments.
+          <p className="text-sm text-slate-600 dark:text-slate-400 break-words">
+            {lang === 'ar'
+              ? 'استقطاب وفحص وتوثيق المدونات من الملفات المحلية وGoogle Drive والمصادر البحثية ومختبر التحرير المراقَب.'
+              : 'Acquire, inspect, validate, and register datasets from local files, Google Drive, external registries, and controlled editing experiments.'}
           </p>
         </div>
 
         <div className="inline-flex flex-wrap items-center gap-1 p-1 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg max-w-full">
           {(
             [
-              ['importer', 'Dataset Importer'],
-              ['export', 'Export to CSV'],
+              ['importer', lang === 'ar' ? 'مستورد المدونات' : 'Dataset Importer'],
+              ['export', lang === 'ar' ? 'تصدير CSV' : 'Export to CSV'],
               ['drive', 'Google Drive'],
-              ['sources', 'Sources & Jobs'],
-              ['editing_lab', 'AI & Editing Lab'],
-              ['human_portal', 'Human Portal'],
+              ['sources', lang === 'ar' ? 'المصادر والمهام' : 'Sources & Jobs'],
+              ['editing_lab', lang === 'ar' ? 'مختبر التحرير' : 'AI & Editing Lab'],
+              ['human_portal', lang === 'ar' ? 'بوابة الكاتب البشري' : 'Human Portal'],
             ] as const
           ).map(([id, label]) => (
             <button
@@ -1186,11 +1221,11 @@ export function DataAcquisitionView({
             </p>
           )}
 
-          <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400 font-mono tabular-nums">
             <span>
               Showing {filteredExportSamples.length} of {samples.length} total sample(s)
             </span>
-            <span>Filename: {buildCsvExportFilename(exportFilter)}</span>
+            <span className="break-all">Filename: {buildCsvExportFilename(exportFilter)}</span>
           </div>
 
           {filteredExportSamples.length === 0 ? (
@@ -1592,13 +1627,13 @@ export function DataAcquisitionView({
       )}
 
       {tab === 'editing_lab' && (
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-6 space-y-5">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-            <div>
-              <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+        <div className="min-w-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-6 space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 min-w-0">
+            <div className="min-w-0">
+              <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100 break-words">
                 Controlled AI Generation &amp; Human-AI Editing Laboratory
               </h2>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
+              <p className="text-xs text-slate-500 dark:text-slate-400 break-words">
                 Record original drafts, apply controlled AI edits or human revisions, extract editing operations, and store provenance.
               </p>
             </div>
@@ -1606,7 +1641,7 @@ export function DataAcquisitionView({
               aria-label="Laboratory workflow mode"
               value={labDirection}
               onChange={(e) => setLabDirection(e.target.value as typeof labDirection)}
-              className="px-3 py-1.5 text-xs rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+              className="max-w-full min-w-0 px-3 py-1.5 text-xs rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 shrink-0"
             >
               <option value="human_to_ai_edited">Human Writing → AI Editing</option>
               <option value="ai_to_human_edited">AI Writing → Human Editing</option>

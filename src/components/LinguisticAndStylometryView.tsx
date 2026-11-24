@@ -16,6 +16,7 @@ import type {
 } from '../engine/types';
 import { classifyTextProbabilistically } from '../engine/classifier';
 import { buildLocalDeterministicMemo } from '../engine/connectivityMonitor';
+import { useI18n } from '../lib/i18nContext';
 import { safeFetchJson } from '../lib/safeFetchJson';
 
 interface Props {
@@ -122,6 +123,8 @@ export function LinguisticAndStylometryView({
   patterns,
   onUpdatePatternStatus,
 }: Props) {
+  const { lang } = useI18n();
+  const isAr = lang === 'ar';
   const [subView, setSubView] = useState<'linguistic' | 'patterns' | 'stylometry'>(initialSubView);
   useEffect(() => {
     setSubView(initialSubView);
@@ -199,23 +202,27 @@ export function LinguisticAndStylometryView({
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-100">
-            04–06. Linguistic Analysis, Patterns &amp; Stylometry
+    <div className="space-y-6 min-w-0">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 min-w-0">
+        <div className="min-w-0">
+          <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-100 break-words">
+            {isAr
+              ? '04–06. التحليل اللغوي والأنماط والبصمات الأسلوبية'
+              : '04–06. Linguistic Analysis, Patterns & Stylometry'}
           </h1>
-          <p className="text-sm text-slate-600 dark:text-slate-400">
-            Multilingual EN/AR feature extraction, validated pattern lifecycle, and probabilistic stylometric profiles.
+          <p className="text-sm text-slate-600 dark:text-slate-400 break-words">
+            {isAr
+              ? 'استخراج الخصائص العربية والإنجليزية، ودورة اعتماد الأنماط، والبصمات الأسلوبية الاحتمالية.'
+              : 'Multilingual EN/AR feature extraction, validated pattern lifecycle, and probabilistic stylometric profiles.'}
           </p>
         </div>
 
-        <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg">
+        <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg max-w-full shrink-0">
           {(
             [
-              ['linguistic', '04. Linguistic Engine'],
-              ['patterns', '05. Pattern Discovery'],
-              ['stylometry', '06. Fingerprints'],
+              ['linguistic', isAr ? '04. المحرك اللغوي' : '04. Linguistic Engine'],
+              ['patterns', isAr ? '05. اكتشاف الأنماط' : '05. Pattern Discovery'],
+              ['stylometry', isAr ? '06. البصمات الأسلوبية' : '06. Fingerprints'],
             ] as const
           ).map(([id, label]) => (
             <button
@@ -236,20 +243,20 @@ export function LinguisticAndStylometryView({
 
       {subView === 'linguistic' && (
         <div className="space-y-6">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
+          <div className="min-w-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 min-w-0">
+              <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0">
                 <label
                   htmlFor="ling-sample-select"
-                  className="text-xs font-medium text-slate-700 dark:text-slate-300"
+                  className="text-xs font-medium text-slate-700 dark:text-slate-300 shrink-0"
                 >
-                  Load Corpus Sample:
+                  {isAr ? 'تحميل عينة:' : 'Load Corpus Sample:'}
                 </label>
                 <select
                   id="ling-sample-select"
                   value={activeSampleId}
                   onChange={(e) => handleLoadSample(e.target.value)}
-                  className="px-3 py-1.5 text-xs font-mono rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+                  className="max-w-full min-w-0 px-3 py-1.5 text-xs font-mono rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
                 >
                   {samples.map((s) => (
                     <option key={s.sample_id} value={s.sample_id}>
@@ -258,7 +265,7 @@ export function LinguisticAndStylometryView({
                   ))}
                 </select>
               </div>
-              <span className="text-xs font-mono text-slate-500 dark:text-slate-400">
+              <span className="text-xs font-mono text-slate-500 dark:text-slate-400 break-words">
                 Engine {metrics.engine_version} · {metrics.detected_language.toUpperCase()}
                 {metrics.detected_dialect ? ` (${metrics.detected_dialect})` : ''}
               </span>
@@ -451,8 +458,8 @@ export function LinguisticAndStylometryView({
 
           <div className="divide-y divide-slate-200 dark:divide-slate-800">
             {patterns.map((pat) => (
-              <div key={pat.pattern_id} className="py-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                <div className="space-y-1 max-w-3xl">
+              <div key={pat.pattern_id} className="py-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4 min-w-0">
+                <div className="space-y-1 max-w-3xl min-w-0">
                   <div className="flex flex-wrap items-center gap-2 text-xs">
                     <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">
                       {pat.pattern_id}
@@ -466,11 +473,11 @@ export function LinguisticAndStylometryView({
                       Confidence {(pat.confidence * 100).toFixed(0)}% · Freq {(pat.frequency * 100).toFixed(0)}%
                     </span>
                   </div>
-                  <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 break-words">
                     {pat.title}
                   </h3>
-                  <p className="text-xs text-slate-600 dark:text-slate-400">{pat.description}</p>
-                  <p className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                  <p className="text-xs text-slate-600 dark:text-slate-400 break-words">{pat.description}</p>
+                  <p className="text-[11px] font-mono text-slate-500 dark:text-slate-400 break-words">
                     Method: {pat.discovery_method} · Samples: {pat.supporting_samples.join(', ')}
                   </p>
                 </div>

@@ -1,5 +1,7 @@
 import type { User } from 'firebase/auth';
 import { LogOut } from 'lucide-react';
+import { UI_STRINGS } from '../engine/i18n';
+import { useI18n } from '../lib/i18nContext';
 
 interface Props {
   user: User | null;
@@ -16,25 +18,34 @@ export function GoogleSignInButton({
   onSignIn,
   onSignOut,
 }: Props) {
+  const { lang, t } = useI18n();
+  const isAr = lang === 'ar';
+
   if (user) {
     return (
       <div className="flex items-center gap-3 shrink-0">
-        <div className="hidden sm:flex flex-col items-end text-right">
+        <div className="hidden sm:flex flex-col items-end text-end">
           <span className="text-xs font-medium text-slate-900 dark:text-slate-100 truncate max-w-[160px]">
             {user.displayName || user.email}
           </span>
           <span className="text-[11px] text-slate-500 dark:text-slate-400">
-            {hasDriveToken ? 'Drive connected' : 'Signed in'}
+            {hasDriveToken
+              ? isAr
+                ? 'Drive متصل'
+                : 'Drive connected'
+              : isAr
+                ? 'تم تسجيل الدخول'
+                : 'Signed in'}
           </span>
         </div>
         <button
           type="button"
           onClick={onSignOut}
-          aria-label="Sign out"
+          aria-label={t(UI_STRINGS.actions.signOut)}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0"
         >
           <LogOut className="w-3.5 h-3.5" />
-          <span>Sign out</span>
+          <span>{t(UI_STRINGS.actions.signOut)}</span>
         </button>
       </div>
     );
@@ -46,7 +57,7 @@ export function GoogleSignInButton({
       onClick={onSignIn}
       disabled={isSigningIn}
       className="gsi-material-button shrink-0"
-      aria-label="Sign in with Google"
+      aria-label={t(UI_STRINGS.actions.signInGoogle)}
     >
       <div className="gsi-material-button-content-wrapper">
         <div className="gsi-material-button-icon">
@@ -75,7 +86,11 @@ export function GoogleSignInButton({
           </svg>
         </div>
         <span className="gsi-material-button-contents">
-          {isSigningIn ? 'Signing in...' : 'Sign in with Google'}
+          {isSigningIn
+            ? isAr
+              ? 'جارٍ تسجيل الدخول...'
+              : 'Signing in...'
+            : t(UI_STRINGS.actions.signInGoogle)}
         </span>
       </div>
     </button>

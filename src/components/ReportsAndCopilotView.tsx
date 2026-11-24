@@ -2,16 +2,25 @@ import { useEffect, useMemo, useState } from 'react';
 import type { User } from 'firebase/auth';
 import {
   BookmarkPlus,
+  Check,
+  Copy,
   Download,
   ExternalLink,
   FileText,
   Printer,
   Send,
+  Server,
   Sparkles,
   UploadCloud,
 } from 'lucide-react';
 import { CLASSIFIER_VERSION } from '../engine/classifier';
 import { buildStylometricProfiles } from '../engine/comparison';
+import { generateLocalCopilotReply } from '../engine/copilotFallback';
+import {
+  buildDeploymentReportMarkdown,
+  DEPLOYMENT_TARGETS,
+  TECHNOLOGY_STACK_INVENTORY,
+} from '../engine/deploymentReport';
 import { LINGUISTIC_ENGINE_VERSION } from '../engine/linguistic';
 import type {
   DatasetRecord,
@@ -24,6 +33,7 @@ import {
   listUserNotesFromFirestore,
   saveResearchNoteToFirestore,
 } from '../lib/firebase';
+import { useI18n } from '../lib/i18nContext';
 import { safeFetchJson } from '../lib/safeFetchJson';
 
 interface Props {
@@ -42,7 +52,8 @@ type ReportType =
   | 'dataset_quality'
   | 'pattern_analysis'
   | 'stylometric_profiles'
-  | 'evaluation_experiments';
+  | 'evaluation_experiments'
+  | 'deployment_architecture';
 
 interface ChatMessage {
   id: string;
@@ -91,8 +102,10 @@ export function ReportsAndCopilotView({
   onSignIn,
   onLogAudit,
 }: Props) {
+  const { lang, t } = useI18n();
   const [subView, setSubView] = useState<'reports' | 'copilot'>(initialSubView);
   const [reportType, setReportType] = useState<ReportType>('dataset_quality');
+  const [copiedSnippetId, setCopiedSnippetId] = useState<string | null>(null);
   const [driveConfirmOpen, setDriveConfirmOpen] = useState(false);
   const [driveUploading, setDriveUploading] = useState(false);
   const [driveStatus, setDriveStatus] = useState<string | null>(null);
@@ -103,8 +116,10 @@ export function ReportsAndCopilotView({
       id: 'welcome',
       role: 'model',
       text:
-        'TEXTPRINT Research Copilot ready. Ask about English or Arabic (MSA / Egyptian) stylometry, human-AI co-editing signatures, calibration metrics (ECE / ROC-AUC), or enable Google Search Grounding for live literature and dataset references.',
-      modelUsed: 'gemini-4-hydrogen',
+        lang === 'ar'
+          ? 'المساعد البحثي في TEXTPRINT جاهز. اسأل عن الأسلوبية العربية والإنجليزية (الفصحى والعامية المصرية)، وتحرير النصوص المشترك، أو مقاييس المعايرة، وسيعمل المساعد محلياً حتى على الاستضافة الساكنة.'
+          : 'TEXTPRINT Research Copilot ready. Ask about English or Arabic (MSA / Egyptian) stylometry, human-AI co-editing signatures, calibration metrics (ECE / ROC-AUC), or deployment architecture. Works offline/static via deterministic corpus fallback too.',
+      modelUsed: 'gemini-4-hydrogen / local-fallback',
       timestamp: new Date().toISOString(),
     },
   ]);
@@ -113,6 +128,7 @@ export function ReportsAndCopilotView({
   const [useSearch, setUseSearch] = useState(false);
   const [includeCorpusContext, setIncludeCorpusContext] = useState(true);
   const [chatLoading, setChatLoading] = useState(false);
+  const [chatNotice, setChatNotice] = useState<string | null>(null);
   const [chatError, setChatError] = useState<string | null>(null);
   const [savedNotes, setSavedNotes] = useState<SavedNote[]>([]);
   const [noteStatus, setNoteStatus] = useState<string | null>(null);
@@ -236,6 +252,27 @@ export function ReportsAndCopilotView({
       };
     }
 
+    if (reportType === 'deployment_architecture') {
+      return {
+        ...baseMeta,
+        title: 'TEXTPRINT Technology Stack & Deployment Report (GitHub Pages / Firebase / Vercel / Cloud Run)',
+        summary: {
+          hosting_targets_documented: DEPLOYMENT_TARGETS.length,
+          stack_layers_documented: TECHNOLOGY_STACK_INVENTORY.length,
+          offline_engines_ready: '6 pure TypeScript modules',
+          static_ai_fallback: 'Local Deterministic Copilot + Memo + Edit Lab',
+        },
+        rows: DEPLOYMENT_TARGETS.map((target) => ({
+          target_id: target.id,
+          platform: lang === 'ar' ? target.nameAr : target.nameEn,
+          mode: lang === 'ar' ? target.modeAr : target.modeEn,
+          build_command: target.buildCommand,
+          publish_target: target.publishDirOrEntry,
+          config_file: target.configFilename,
+        })),
+      };
+    }
+
     return {
       ...baseMeta,
       title: 'Model Training & Calibration Evaluation Report',
@@ -256,7 +293,7 @@ export function ReportsAndCopilotView({
         edited_text_f1: e.metrics.edited_text_f1,
       })),
     };
-  }, [reportType, datasets, samples, patterns, stylometricProfiles, experiments, generatedTimestamp]);
+  }, [reportType, datasets, samples, patterns, stylometricProfiles, experiments, generatedTimestamp, lang]);
 
   const buildCsvReport = () => {
     const rows = reportPayload.rows as Array<Record<string, unknown>>;
@@ -397,6 +434,7 @@ export function ReportsAndCopilotView({
     if (!promptOverride) setChatInput('');
     setChatLoading(true);
     setChatError(null);
+    setChatNotice(null);
 
     try {
       const apiMessages = nextMessages.map((m, idx) => ({
@@ -419,9 +457,38 @@ export function ReportsAndCopilotView({
             mode: chatMode,
           }),
         },
-        'AI Research Copilot requires the Express backend server (not available on static hosting).'
+        'Express /api/ai/chat server not attached (static hosting mode active).'
       );
+
       if (!result.ok || !result.data) {
+        // Automatic deterministic local fallback when hosted statically or backend offline
+        if (result.isHtmlFallback || result.status === 0 || result.status >= 500) {
+          const localReply = generateLocalCopilotReply(text, {
+            datasets,
+            samples,
+            patterns,
+            experiments,
+            uiLanguage: lang,
+          });
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `loc_${Date.now().toString(36)}`,
+              role: 'model',
+              text: localReply.text,
+              modelUsed: localReply.modelUsed,
+              groundingSources: localReply.groundingSources,
+              timestamp: new Date().toISOString(),
+            },
+          ]);
+          setChatNotice(
+            t({
+              en: 'Static hosting detected (no Express backend attached). Showing deterministic corpus-grounded Copilot response below—you can attach a Cloud Run Express URL anytime in 14. Admin & Governance.',
+              ar: 'تم رصد الاستضافة الساكنة (بدون خادم Express). تم توليد إجابة حتمية مبنية على بياناتك المحمّلة بالأسفل؛ ويمكنك ربط رابط خادم Cloud Run من شاشة 14. الإدارة والحوكمة.',
+            })
+          );
+          return;
+        }
         throw new Error(result.error || 'Copilot request failed.');
       }
       const data = result.data;
@@ -469,16 +536,22 @@ export function ReportsAndCopilotView({
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
+        <div className="min-w-0">
           <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-100">
-            12–13. Reports Center &amp; AI Research Copilot
+            {t({
+              en: '12–13. Reports, Deployment Guide & AI Research Copilot',
+              ar: '12–13. مركز التقارير ودليل النشر والمساعد البحثي الذكي',
+            })}
           </h1>
           <p className="text-sm text-slate-600 dark:text-slate-400">
-            Generate versioned multi-format research reports with Drive export, or consult the grounded Gemini stylometry copilot.
+            {t({
+              en: 'Generate versioned multi-format reports, inspect GitHub Pages / Firebase / Vercel deployment playbooks, or consult the Copilot (live Gemini or offline fallback).',
+              ar: 'أنشئ تقارير بحثية متعددة الصيغ، أو استعرض دليل النشر على GitHub Pages و Firebase و Vercel، أو استشر المساعد البحثي محلياً أو عبر Gemini.',
+            })}
           </p>
         </div>
 
-        <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg">
+        <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shrink-0 max-w-full">
           <button
             type="button"
             onClick={() => setSubView('reports')}
@@ -488,7 +561,7 @@ export function ReportsAndCopilotView({
                 : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
             }`}
           >
-            12. Reports &amp; Analytics
+            {t({ en: '12. Reports & Deployment', ar: '12. التقارير والنشر' })}
           </button>
           <button
             type="button"
@@ -499,7 +572,7 @@ export function ReportsAndCopilotView({
                 : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
             }`}
           >
-            13. AI Research Copilot
+            {t({ en: '13. AI Research Copilot', ar: '13. المساعد البحثي الذكي' })}
           </button>
         </div>
       </div>
@@ -508,12 +581,12 @@ export function ReportsAndCopilotView({
         <div className="space-y-5">
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4">
             <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
-              <div className="w-full lg:w-80">
+              <div className="w-full lg:w-96 min-w-0">
                 <label
                   htmlFor="report-type-select"
                   className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1"
                 >
-                  Report Template
+                  {t({ en: 'Report Template', ar: 'قالب التقرير' })}
                 </label>
                 <select
                   id="report-type-select"
@@ -521,14 +594,43 @@ export function ReportsAndCopilotView({
                   onChange={(e) => setReportType(e.target.value as ReportType)}
                   className="w-full px-3 py-2 text-xs rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
                 >
-                  <option value="dataset_quality">Dataset Quality &amp; Corpus Governance</option>
-                  <option value="pattern_analysis">Writing Pattern Discovery &amp; Validation</option>
-                  <option value="stylometric_profiles">Stylometric Fingerprints Summary</option>
-                  <option value="evaluation_experiments">Model Evaluation &amp; Experiments</option>
+                  <option value="dataset_quality">
+                    {t({ en: 'Dataset Quality & Corpus Governance', ar: 'تقرير جودة المدونات والحوكمة' })}
+                  </option>
+                  <option value="pattern_analysis">
+                    {t({ en: 'Writing Pattern Discovery & Validation', ar: 'اكتشاف وتحقق أنماط الكتابة' })}
+                  </option>
+                  <option value="stylometric_profiles">
+                    {t({ en: 'Stylometric Fingerprints Summary', ar: 'ملخص البصمات الأسلوبية' })}
+                  </option>
+                  <option value="evaluation_experiments">
+                    {t({ en: 'Model Evaluation & Experiments', ar: 'تقييم النماذج والتجارب' })}
+                  </option>
+                  <option value="deployment_architecture">
+                    {t({
+                      en: 'Deployment & Technology Guide (GitHub Pages / Firebase / Vercel / Cloud Run)',
+                      ar: 'تقرير التقنيات ودليل النشر (GitHub Pages / Firebase / Vercel / Cloud Run)',
+                    })}
+                  </option>
                 </select>
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    downloadBlob(
+                      buildDeploymentReportMarkdown(lang),
+                      'textprint-deployment-guide.md',
+                      'text/markdown;charset=utf-8'
+                    );
+                    onLogAudit('EXPORT_MD_DEPLOYMENT', 'report', 'deployment_architecture', 'Exported Markdown deployment & technology guide.');
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Deploy Guide (.md)</span>
+                </button>
                 <button
                   type="button"
                   onClick={() => {
@@ -572,7 +674,7 @@ export function ReportsAndCopilotView({
                   className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
                 >
                   <Printer className="w-3.5 h-3.5" />
-                  <span>Print / PDF</span>
+                  <span>{t({ en: 'Print / PDF', ar: 'طباعة / PDF' })}</span>
                 </button>
                 <button
                   type="button"
@@ -640,7 +742,7 @@ export function ReportsAndCopilotView({
 
             {/* Data Table Preview */}
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs border-collapse">
+              <table className="w-full text-start text-xs border-collapse">
                 <thead>
                   <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400">
                     {reportPayload.rows[0] &&
@@ -657,7 +759,7 @@ export function ReportsAndCopilotView({
                       {Object.values(row).map((cell, cIdx) => (
                         <td
                           key={cIdx}
-                          className="py-2 pr-4 font-mono text-slate-800 dark:text-slate-200 tabular-nums"
+                          className="py-2 pr-4 font-mono text-slate-800 dark:text-slate-200 tabular-nums break-words"
                         >
                           {typeof cell === 'number' && !Number.isInteger(cell)
                             ? cell.toFixed(3)
@@ -668,6 +770,130 @@ export function ReportsAndCopilotView({
                   ))}
                 </tbody>
               </table>
+            </div>
+          </div>
+
+          {/* Interactive Technology Stack & Multi-Platform Deployment Playbooks */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2 min-w-0">
+                <Server className="w-4 h-4 text-sky-600 dark:text-sky-400 shrink-0" />
+                <div>
+                  <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                    {t({
+                      en: 'Technology Stack & Deployment Playbook (GitHub Pages / Firebase / Vercel / Cloud Run)',
+                      ar: 'التقنيات المستخدمة ودليل النشر الشامل (GitHub Pages / Firebase / Vercel / Cloud Run)',
+                    })}
+                  </h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    {t({
+                      en: 'Complete blueprint of every technology powering TEXTPRINT and exact configs for static or full-stack deployment.',
+                      ar: 'خريطة شاملة لكل التقنيات داخل المنصة مع إعدادات النسخ الساكنة والكاملة.',
+                    })}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  downloadBlob(
+                    buildDeploymentReportMarkdown(lang),
+                    `textprint-architecture-deploy-${lang}.md`,
+                    'text/markdown;charset=utf-8'
+                  );
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-sky-600 text-white hover:bg-sky-700"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>{t({ en: 'Download Full Report (.md)', ar: 'تنزيل التقرير الكامل (.md)' })}</span>
+              </button>
+            </div>
+
+            {/* Tech Inventory */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {TECHNOLOGY_STACK_INVENTORY.map((item) => (
+                <div
+                  key={item.technology}
+                  className="p-3.5 rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 space-y-1 min-w-0"
+                >
+                  <p className="text-[11px] font-mono text-sky-700 dark:text-sky-400">
+                    {lang === 'ar' ? item.layerAr : item.layerEn}
+                  </p>
+                  <p className="text-xs font-semibold text-slate-900 dark:text-slate-100 break-words">
+                    {item.technology}
+                  </p>
+                  <p className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                    {item.version}
+                  </p>
+                  <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                    {lang === 'ar' ? item.purposeAr : item.purposeEn}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            {/* Hosting Playbook Cards */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {DEPLOYMENT_TARGETS.map((target) => (
+                <div
+                  key={target.id}
+                  className="p-4 rounded-md border border-slate-200 dark:border-slate-800 space-y-3 min-w-0"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                        {lang === 'ar' ? target.nameAr : target.nameEn}
+                      </h3>
+                      <p className="text-xs font-mono text-sky-700 dark:text-sky-400">
+                        {lang === 'ar' ? target.modeAr : target.modeEn}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (typeof navigator !== 'undefined' && navigator.clipboard) {
+                          navigator.clipboard.writeText(target.configSnippet).catch(() => {});
+                        }
+                        setCopiedSnippetId(target.id);
+                        window.setTimeout(() => setCopiedSnippetId(null), 1500);
+                      }}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono rounded border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 shrink-0"
+                    >
+                      {copiedSnippetId === target.id ? (
+                        <Check className="w-3 h-3 text-emerald-600" />
+                      ) : (
+                        <Copy className="w-3 h-3" />
+                      )}
+                      <span>{copiedSnippetId === target.id ? 'Copied' : target.configFilename}</span>
+                    </button>
+                  </div>
+
+                  <p className="text-xs text-slate-600 dark:text-slate-400">
+                    {lang === 'ar' ? target.bestForAr : target.bestForEn}
+                  </p>
+
+                  <div className="space-y-1 text-xs">
+                    <p className="font-semibold text-emerald-700 dark:text-emerald-400">
+                      {t({ en: 'Works Out-of-the-Box:', ar: 'يعمل مباشرة دون تعقيد:' })}
+                    </p>
+                    <ul className="space-y-0.5 text-slate-600 dark:text-slate-400">
+                      {(lang === 'ar' ? target.worksOutOfBoxAr : target.worksOutOfBoxEn).map((line, i) => (
+                        <li key={i}>• {line}</li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <ol className="list-decimal list-inside space-y-1 text-xs text-slate-700 dark:text-slate-300">
+                    {(lang === 'ar' ? target.stepsAr : target.stepsEn).map((st, i) => (
+                      <li key={i}>{st}</li>
+                    ))}
+                  </ol>
+
+                  <pre dir="ltr" className="p-2.5 rounded bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-[11px] font-mono text-slate-800 dark:text-slate-200 overflow-x-auto max-h-44">
+                    {target.configSnippet}
+                  </pre>
+                </div>
+              ))}
             </div>
           </div>
 
@@ -772,35 +998,35 @@ export function ReportsAndCopilotView({
               {messages.map((msg) => (
                 <div
                   key={msg.id}
-                  className={`p-3.5 rounded-lg border text-xs leading-relaxed ${
+                  className={`p-3.5 rounded-lg border text-xs leading-relaxed break-words ${
                     msg.role === 'user'
-                      ? 'ml-8 bg-sky-50 dark:bg-sky-950/30 border-sky-200 dark:border-sky-900 text-slate-900 dark:text-slate-100'
-                      : 'mr-4 bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200'
+                      ? 'ms-6 bg-sky-50 dark:bg-sky-950/30 border-sky-200 dark:border-sky-900 text-slate-900 dark:text-slate-100'
+                      : 'me-2 bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200'
                   }`}
                 >
-                  <div className="flex items-center justify-between gap-2 mb-1.5">
-                    <span className="font-mono text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+                    <span className="font-mono text-[11px] font-medium text-slate-500 dark:text-slate-400 break-all">
                       {msg.role === 'user'
-                        ? 'Researcher'
+                        ? t({ en: 'Researcher', ar: 'الباحث' })
                         : `Copilot · ${msg.modelUsed || 'gemini-4-hydrogen'}`}
                     </span>
                     {msg.role === 'model' && msg.id !== 'welcome' && (
                       <button
                         type="button"
                         onClick={() => handleSaveNote(msg)}
-                        className="inline-flex items-center gap-1 text-[11px] text-sky-700 dark:text-sky-400 hover:underline"
+                        className="inline-flex items-center gap-1 text-[11px] text-sky-700 dark:text-sky-400 hover:underline shrink-0"
                       >
                         <BookmarkPlus className="w-3 h-3" />
-                        <span>Save Note</span>
+                        <span>{t({ en: 'Save Note', ar: 'حفظ الملاحظة' })}</span>
                       </button>
                     )}
                   </div>
-                  <p className="whitespace-pre-wrap">{msg.text}</p>
+                  <p dir="auto" className="whitespace-pre-wrap break-words">{msg.text}</p>
 
                   {msg.groundingSources && msg.groundingSources.length > 0 && (
                     <div className="mt-2.5 pt-2 border-t border-slate-200 dark:border-slate-800 space-y-1">
                       <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
-                        Grounded Web Sources:
+                        {t({ en: 'Grounded References:', ar: 'المصادر الموثقة:' })}
                       </p>
                       <ul className="space-y-1">
                         {msg.groundingSources.map((src, i) => (
@@ -809,7 +1035,7 @@ export function ReportsAndCopilotView({
                               href={src.uri}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1 text-[11px] text-sky-700 dark:text-sky-400 hover:underline"
+                              className="inline-flex items-center gap-1 text-[11px] text-sky-700 dark:text-sky-400 hover:underline break-all"
                             >
                               <ExternalLink className="w-3 h-3 shrink-0" />
                               <span>{src.title || src.uri}</span>
@@ -823,11 +1049,16 @@ export function ReportsAndCopilotView({
               ))}
               {chatLoading && (
                 <p className="text-xs font-mono text-slate-500 dark:text-slate-400">
-                  Synthesizing analytical response...
+                  {t({ en: 'Synthesizing analytical response...', ar: 'جاري إعداد التحليل البحثي...' })}
                 </p>
               )}
             </div>
 
+            {chatNotice && (
+              <div role="status" className="mx-4 mb-2 px-3 py-2 text-xs text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 rounded">
+                {chatNotice}
+              </div>
+            )}
             {chatError && (
               <div className="mx-4 mb-2 px-3 py-2 text-xs text-rose-700 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 rounded">
                 {chatError}

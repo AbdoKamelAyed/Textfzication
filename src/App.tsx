@@ -3,11 +3,14 @@ import type { User } from 'firebase/auth';
 import {
   Activity,
   BarChart3,
+  BookOpen,
   Bot,
+  Compass,
   Database,
   FileSearch,
   FlaskConical,
   GitCompare,
+  Languages,
   Layers,
   LayoutDashboard,
   Menu,
@@ -23,6 +26,8 @@ import {
 import { AiAnalysisAndCompareView } from './components/AiAnalysisAndCompareView';
 import { DataAcquisitionView } from './components/DataAcquisitionView';
 import { DatasetManagementView } from './components/DatasetManagementView';
+import { DictionaryLabView } from './components/DictionaryLabView';
+import { DocumentationGuideView } from './components/DocumentationGuideView';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { GoogleSignInButton } from './components/GoogleSignInButton';
 import { GovernanceAndSettingsView } from './components/GovernanceAndSettingsView';
@@ -31,6 +36,8 @@ import { ReportsAndCopilotView } from './components/ReportsAndCopilotView';
 import { ResearchDashboard, type ModuleId } from './components/ResearchDashboard';
 import { TrainingAndExperimentsView } from './components/TrainingAndExperimentsView';
 import { VisualIntelligenceView } from './components/VisualIntelligenceView';
+import { UI_STRINGS } from './engine/i18n';
+import { useI18n } from './lib/i18nContext';
 import { applyBulkSampleValidation } from './engine/bulkValidation';
 import { createImportCollectionJob } from './engine/collectionJobs';
 import {
@@ -82,50 +89,60 @@ import {
 import { resolveApiUrl } from './lib/apiBase';
 import { safeFetchJson } from './lib/safeFetchJson';
 
-const NAV_GROUPS: Array<{
-  heading: string;
-  items: Array<{ id: ModuleId; label: string; icon: React.ComponentType<{ className?: string }> }>;
+const NAV_GROUP_DEFS: Array<{
+  headingKey: keyof typeof UI_STRINGS.navGroups;
+  items: Array<{
+    id: ModuleId;
+    moduleKey: keyof typeof UI_STRINGS.modules;
+    icon: React.ComponentType<{ className?: string }>;
+  }>;
 }> = [
   {
-    heading: 'Overview',
-    items: [{ id: 'dashboard', label: '01. Research Dashboard', icon: LayoutDashboard }],
-  },
-  {
-    heading: 'Corpus & Quality',
+    headingKey: 'overview',
     items: [
-      { id: 'acquisition', label: '02. Data Acquisition', icon: Database },
-      { id: 'datasets', label: '03. Dataset Management', icon: Layers },
+      { id: 'dashboard', moduleKey: 'dashboard', icon: LayoutDashboard },
+      { id: 'guide', moduleKey: 'guide', icon: Compass },
     ],
   },
   {
-    heading: 'Stylometry & Analysis',
+    headingKey: 'corpus',
     items: [
-      { id: 'linguistic', label: '04. Linguistic Engine', icon: FileSearch },
-      { id: 'patterns', label: '05. Writing Patterns', icon: Activity },
-      { id: 'stylometry', label: '06. Stylometric Profiles', icon: Radar },
-      { id: 'ai_analysis', label: '07. AI Text Analysis', icon: ShieldCheck },
-      { id: 'compare', label: '08. Comparative Lab', icon: GitCompare },
+      { id: 'acquisition', moduleKey: 'acquisition', icon: Database },
+      { id: 'datasets', moduleKey: 'datasets', icon: Layers },
     ],
   },
   {
-    heading: 'Modeling & Visuals',
+    headingKey: 'stylometry',
     items: [
-      { id: 'training', label: '09. Training & Eval', icon: FlaskConical },
-      { id: 'visuals', label: '10. Knowledge Graph', icon: Network },
-      { id: 'experiments', label: '11. Experiments', icon: BarChart3 },
+      { id: 'linguistic', moduleKey: 'linguistic', icon: FileSearch },
+      { id: 'patterns', moduleKey: 'patterns', icon: Activity },
+      { id: 'stylometry', moduleKey: 'stylometry', icon: Radar },
+      { id: 'ai_analysis', moduleKey: 'ai_analysis', icon: ShieldCheck },
+      { id: 'compare', moduleKey: 'compare', icon: GitCompare },
+      { id: 'dictionary', moduleKey: 'dictionary', icon: BookOpen },
     ],
   },
   {
-    heading: 'Reports & Governance',
+    headingKey: 'modeling',
     items: [
-      { id: 'reports', label: '12. Reports & Analytics', icon: Sparkles },
-      { id: 'copilot', label: '13. AI Research Copilot', icon: Bot },
-      { id: 'governance', label: '14. Admin & Governance', icon: Settings },
+      { id: 'training', moduleKey: 'training', icon: FlaskConical },
+      { id: 'visuals', moduleKey: 'visuals', icon: Network },
+      { id: 'experiments', moduleKey: 'experiments', icon: BarChart3 },
+    ],
+  },
+  {
+    headingKey: 'reports',
+    items: [
+      { id: 'reports', moduleKey: 'reports', icon: Sparkles },
+      { id: 'copilot', moduleKey: 'copilot', icon: Bot },
+      { id: 'governance', moduleKey: 'governance', icon: Settings },
     ],
   },
 ];
 
 export default function App() {
+  const { lang, toggleLang, t } = useI18n();
+  const isAr = lang === 'ar';
   const [activeModule, setActiveModule] = useState<ModuleId>('dashboard');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -542,30 +559,39 @@ export default function App() {
     appendAudit('CLEAR_INDEXEDDB', 'storage', 'indexeddb', 'Cleared local browser IndexedDB stores.');
   };
 
+  const navGroups = NAV_GROUP_DEFS.map((g) => ({
+    heading: t(UI_STRINGS.navGroups[g.headingKey]),
+    items: g.items.map((item) => ({
+      id: item.id,
+      label: t(UI_STRINGS.modules[item.moduleKey]),
+      icon: item.icon,
+    })),
+  }));
+
   const activeNavLabel =
-    NAV_GROUPS.flatMap((g) => g.items).find((item) => item.id === activeModule)?.label ??
+    navGroups.flatMap((g) => g.items).find((item) => item.id === activeModule)?.label ??
     'TEXTPRINT Laboratory';
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex overflow-x-hidden">
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex overflow-x-clip">
         {/* Desktop Sidebar */}
-        <aside className="hidden lg:flex lg:w-64 lg:flex-col lg:fixed lg:inset-y-0 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+        <aside className="hidden lg:flex lg:w-64 lg:flex-col lg:fixed lg:inset-y-0 lg:start-0 border-e border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
           <div className="h-14 px-5 flex items-center justify-between border-b border-slate-200 dark:border-slate-800">
-            <div>
+            <div className="min-w-0 truncate">
               <span className="font-mono text-sm font-semibold tracking-tight text-slate-900 dark:text-slate-50">
                 TEXTPRINT
               </span>
-              <span className="ml-2 text-[11px] font-mono text-slate-500 dark:text-slate-400">
-                v1.4
+              <span className="ms-2 text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                v1.5
               </span>
             </div>
           </div>
 
           <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5" aria-label="Laboratory Modules">
-            {NAV_GROUPS.map((group) => (
+            {navGroups.map((group) => (
               <div key={group.heading} className="space-y-1">
-                <p className="px-2.5 text-[11px] font-medium uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                <p className="px-2.5 text-[11px] font-medium uppercase tracking-wider text-slate-400 dark:text-slate-500 truncate">
                   {group.heading}
                 </p>
                 {group.items.map((item) => {
@@ -576,7 +602,7 @@ export default function App() {
                       key={item.id}
                       type="button"
                       onClick={() => setActiveModule(item.id)}
-                      className={`w-full flex items-center gap-2.5 px-2.5 py-2 text-xs rounded-md transition-colors text-left ${
+                      className={`w-full flex items-center gap-2.5 px-2.5 py-2 text-xs rounded-md transition-colors text-start ${
                         active
                           ? 'bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300 font-medium'
                           : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/70'
@@ -591,8 +617,8 @@ export default function App() {
             ))}
           </nav>
 
-          <div className="p-3 border-t border-slate-200 dark:border-slate-800 text-[11px] text-slate-500 dark:text-slate-400 font-mono">
-            {samples.length} indexed · {samples.filter((s) => !s.is_synthetic_demo).length} research
+          <div className="p-3 border-t border-slate-200 dark:border-slate-800 text-[11px] text-slate-500 dark:text-slate-400 font-mono truncate">
+            {samples.length} {isAr ? 'مفهرس' : 'indexed'} · {samples.filter((s) => !s.is_synthetic_demo).length} {isAr ? 'بحثي' : 'research'}
           </div>
         </aside>
 
@@ -603,7 +629,7 @@ export default function App() {
               className="fixed inset-0 bg-slate-950/50"
               onClick={() => setMobileNavOpen(false)}
             />
-            <aside className="relative w-72 max-w-[82vw] bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col z-50">
+            <aside className="relative w-72 max-w-[82vw] bg-white dark:bg-slate-900 border-e border-slate-200 dark:border-slate-800 flex flex-col z-50">
               <div className="h-14 px-4 flex items-center justify-between border-b border-slate-200 dark:border-slate-800">
                 <span className="font-mono text-sm font-semibold">TEXTPRINT</span>
                 <button
@@ -616,9 +642,9 @@ export default function App() {
                 </button>
               </div>
               <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5">
-                {NAV_GROUPS.map((group) => (
+                {navGroups.map((group) => (
                   <div key={group.heading} className="space-y-1">
-                    <p className="px-2.5 text-[11px] font-medium uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                    <p className="px-2.5 text-[11px] font-medium uppercase tracking-wider text-slate-400 dark:text-slate-500 truncate">
                       {group.heading}
                     </p>
                     {group.items.map((item) => {
@@ -632,7 +658,7 @@ export default function App() {
                             setActiveModule(item.id);
                             setMobileNavOpen(false);
                           }}
-                          className={`w-full flex items-center gap-2.5 px-2.5 py-2 text-xs rounded-md transition-colors text-left ${
+                          className={`w-full flex items-center gap-2.5 px-2.5 py-2 text-xs rounded-md transition-colors text-start ${
                             active
                               ? 'bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300 font-medium'
                               : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/70'
@@ -651,36 +677,48 @@ export default function App() {
         )}
 
         {/* Main Content Area */}
-        <div className="flex-1 lg:pl-64 flex flex-col min-w-0">
-          <header className="h-14 sticky top-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur border-b border-slate-200 dark:border-slate-800 px-4 sm:px-6 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3 min-w-0">
+        <div className="flex-1 lg:ps-64 flex flex-col min-w-0">
+          <header className="h-14 sticky top-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur border-b border-slate-200 dark:border-slate-800 px-3 sm:px-6 flex items-center justify-between gap-2 min-w-0">
+            <div className="flex items-center gap-2.5 min-w-0 flex-1">
               <button
                 type="button"
                 onClick={() => setMobileNavOpen(true)}
                 aria-label="Open navigation menu"
-                className="lg:hidden p-1.5 rounded-md border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300"
+                className="lg:hidden p-1.5 rounded-md border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 shrink-0"
               >
                 <Menu className="w-4 h-4" />
               </button>
-              <span className="text-xs font-mono text-slate-500 dark:text-slate-400 truncate">
-                <span className="sm:hidden font-semibold text-slate-800 dark:text-slate-200">TEXTPRINT</span>
-                <span className="hidden sm:inline">TEXTPRINT / {activeNavLabel}</span>
+              <span className="hidden sm:inline text-xs font-mono text-slate-500 dark:text-slate-400 truncate">
+                TEXTPRINT / {activeNavLabel}
               </span>
             </div>
 
-            <div className="flex items-center gap-2.5 shrink-0">
+            <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+              <button
+                type="button"
+                data-testid="lang-toggle-btn"
+                onClick={toggleLang}
+                aria-label={isAr ? 'Switch interface to English' : 'تبديل الواجهة إلى العربية'}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md border border-sky-300 dark:border-sky-700 bg-sky-50/70 dark:bg-sky-950/40 text-sky-800 dark:text-sky-200 hover:bg-sky-100 dark:hover:bg-sky-900/60 transition-colors whitespace-nowrap shrink-0"
+              >
+                <Languages className="w-3.5 h-3.5 shrink-0" />
+                <span>{t(UI_STRINGS.actions.switchLang)}</span>
+              </button>
+
               <button
                 type="button"
                 onClick={() => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))}
                 aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0"
               >
                 {theme === 'dark' ? (
                   <Sun className="w-3.5 h-3.5" />
                 ) : (
                   <Moon className="w-3.5 h-3.5" />
                 )}
-                <span className="hidden sm:inline">{theme === 'dark' ? 'Light' : 'Dark'}</span>
+                <span className="hidden sm:inline">
+                  {theme === 'dark' ? t(UI_STRINGS.actions.light) : t(UI_STRINGS.actions.dark)}
+                </span>
               </button>
 
               <GoogleSignInButton
@@ -695,13 +733,13 @@ export default function App() {
 
           {authError && (
             <div className="mx-4 sm:mx-6 mt-4 px-4 py-2.5 text-xs text-rose-700 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 rounded-md flex items-center justify-between gap-2">
-              <span>{authError}</span>
+              <span className="break-words min-w-0">{authError}</span>
               <button
                 type="button"
                 onClick={() => setAuthError(null)}
                 className="underline shrink-0"
               >
-                Dismiss
+                {t(UI_STRINGS.actions.dismiss)}
               </button>
             </div>
           )}
@@ -810,6 +848,19 @@ export default function App() {
                 onClearIndexedDb={handleClearIndexedDb}
                 onSignIn={handleSignIn}
                 onLogAudit={appendAudit}
+              />
+            )}
+
+            {activeModule === 'dictionary' && (
+              <DictionaryLabView
+                samples={samples}
+                onLogAudit={appendAudit}
+              />
+            )}
+
+            {activeModule === 'guide' && (
+              <DocumentationGuideView
+                onNavigate={setActiveModule}
               />
             )}
           </main>

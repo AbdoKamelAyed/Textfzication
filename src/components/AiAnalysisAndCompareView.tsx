@@ -3,6 +3,8 @@ import { AlertTriangle } from 'lucide-react';
 import { classifyTextProbabilistically } from '../engine/classifier';
 import { compareTexts } from '../engine/comparison';
 import { DEMO_SAMPLES } from '../engine/demoCorpus';
+import { getOriginLabel } from '../engine/i18n';
+import { useI18n } from '../lib/i18nContext';
 import type { ClassificationLabel, TextSample } from '../engine/types';
 
 interface Props {
@@ -11,6 +13,8 @@ interface Props {
 }
 
 export function AiAnalysisAndCompareView({ initialSubView, samples }: Props) {
+  const { lang } = useI18n();
+  const isAr = lang === 'ar';
   const [subView, setSubView] = useState<'ai_analysis' | 'compare'>(initialSubView);
   useEffect(() => {
     setSubView(initialSubView);
@@ -46,18 +50,22 @@ export function AiAnalysisAndCompareView({ initialSubView, samples }: Props) {
   ][];
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-100">
-            07–08. Probabilistic AI Analysis &amp; Comparative Laboratory
+    <div className="space-y-6 min-w-0">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 min-w-0">
+        <div className="min-w-0">
+          <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-100 break-words">
+            {isAr
+              ? '07–08. التحليل الاحتمالي بالذكاء الاصطناعي والمختبر المقارن'
+              : '07–08. Probabilistic AI Analysis & Comparative Laboratory'}
           </h1>
-          <p className="text-sm text-slate-600 dark:text-slate-400">
-            Calibrated multi-signal origin classification with explicit uncertainty bounds and side-by-side stylometric comparison.
+          <p className="text-sm text-slate-600 dark:text-slate-400 break-words">
+            {isAr
+              ? 'تصنيف احتمالي متعدد الإشارات مع حدود عدم اليقين ومقارنة أسلوبية جنباً إلى جنب.'
+              : 'Calibrated multi-signal origin classification with explicit uncertainty bounds and side-by-side stylometric comparison.'}
           </p>
         </div>
 
-        <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg">
+        <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg max-w-full shrink-0">
           <button
             type="button"
             onClick={() => setSubView('ai_analysis')}
@@ -67,7 +75,7 @@ export function AiAnalysisAndCompareView({ initialSubView, samples }: Props) {
                 : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
             }`}
           >
-            07. AI Text Analysis
+            {isAr ? '07. التحليل الاحتمالي' : '07. AI Text Analysis'}
           </button>
           <button
             type="button"
@@ -78,20 +86,20 @@ export function AiAnalysisAndCompareView({ initialSubView, samples }: Props) {
                 : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
             }`}
           >
-            08. Comparative Lab
+            {isAr ? '08. المختبر المقارن' : '08. Comparative Lab'}
           </button>
         </div>
       </div>
 
       {subView === 'ai_analysis' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <div className="lg:col-span-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4">
-            <div className="flex items-center justify-between gap-2">
+          <div className="lg:col-span-6 min-w-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
               <label
                 htmlFor="ai-sample-select"
-                className="text-xs font-medium text-slate-700 dark:text-slate-300"
+                className="text-xs font-medium text-slate-700 dark:text-slate-300 shrink-0"
               >
-                Sample Passage
+                {isAr ? 'عينة من المدونة' : 'Sample Passage'}
               </label>
               <select
                 id="ai-sample-select"
@@ -102,7 +110,7 @@ export function AiAnalysisAndCompareView({ initialSubView, samples }: Props) {
                   const found = samples.find((s) => s.sample_id === id);
                   if (found) setTextInput(found.text);
                 }}
-                className="px-2.5 py-1.5 text-xs font-mono rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+                className="max-w-full min-w-0 flex-1 sm:flex-initial px-2.5 py-1.5 text-xs font-mono rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
               >
                 {samples.map((s) => (
                   <option key={s.sample_id} value={s.sample_id}>
@@ -118,26 +126,32 @@ export function AiAnalysisAndCompareView({ initialSubView, samples }: Props) {
               dir="auto"
               value={textInput}
               onChange={(e) => setTextInput(e.target.value)}
-              placeholder="Paste English or Arabic text (>= 40 words recommended)..."
+              placeholder={
+                isAr
+                  ? 'ألصق نصاً عربياً أو إنجليزياً (يُفضّل >= ٤٠ كلمة)...'
+                  : 'Paste English or Arabic text (>= 40 words recommended)...'
+              }
               className="w-full px-3.5 py-2.5 text-sm rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 leading-relaxed"
             />
 
             <div className="p-3 rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/60 text-xs text-amber-900 dark:text-amber-200 flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-              <span>
-                Probabilistic research estimate only. Authorship cannot be established with absolute certainty; treat outputs as calibrated signal distributions alongside human review.
+              <span className="break-words">
+                {isAr
+                  ? 'تقدير بحثي احتمالي فقط؛ لا يمكن إثبات التأليف بشكل قطعي من الأسلوب وحده، لذا يُعامل التوزيع الاحتمالي كدلالة إرشادية مع مراجعة بشرية.'
+                  : 'Probabilistic research estimate only. Authorship cannot be established with absolute certainty; treat outputs as calibrated signal distributions alongside human review.'}
               </span>
             </div>
           </div>
 
-          <div className="lg:col-span-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-5">
+          <div className="lg:col-span-6 min-w-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-5">
             <div className="flex flex-wrap items-baseline justify-between gap-2 pb-3 border-b border-slate-200 dark:border-slate-800">
-              <div>
+              <div className="min-w-0">
                 <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Calibrated Classification ({classification.model_version})
+                  {isAr ? 'التصنيف المعاير' : 'Calibrated Classification'} ({classification.model_version})
                 </p>
-                <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-50">
-                  {classification.predicted_label}
+                <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-50 break-words">
+                  {getOriginLabel(lang, classification.predicted_label)}
                 </h2>
               </div>
               <div className="text-right font-mono tabular-nums">
@@ -225,10 +239,10 @@ export function AiAnalysisAndCompareView({ initialSubView, samples }: Props) {
       {subView === 'compare' && (
         <div className="space-y-6">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">
-                  Reference Text A
+            <div className="min-w-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
+                <span className="text-xs font-semibold text-slate-800 dark:text-slate-200 shrink-0">
+                  {isAr ? 'النص المرجعي أ' : 'Reference Text A'}
                 </span>
                 <select
                   aria-label="Select Reference Text A"
@@ -238,7 +252,7 @@ export function AiAnalysisAndCompareView({ initialSubView, samples }: Props) {
                     const found = samples.find((s) => s.sample_id === e.target.value);
                     if (found) setLeftText(found.text);
                   }}
-                  className="px-2 py-1 text-xs font-mono rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+                  className="max-w-full min-w-0 flex-1 sm:flex-initial px-2 py-1 text-xs font-mono rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
                 >
                   {samples.map((s) => (
                     <option key={s.sample_id} value={s.sample_id}>
@@ -257,10 +271,10 @@ export function AiAnalysisAndCompareView({ initialSubView, samples }: Props) {
               />
             </div>
 
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">
-                  Comparison Text B
+            <div className="min-w-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
+                <span className="text-xs font-semibold text-slate-800 dark:text-slate-200 shrink-0">
+                  {isAr ? 'النص المقارن ب' : 'Comparison Text B'}
                 </span>
                 <select
                   aria-label="Select Comparison Text B"
@@ -270,7 +284,7 @@ export function AiAnalysisAndCompareView({ initialSubView, samples }: Props) {
                     const found = samples.find((s) => s.sample_id === e.target.value);
                     if (found) setRightText(found.text);
                   }}
-                  className="px-2 py-1 text-xs font-mono rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
+                  className="max-w-full min-w-0 flex-1 sm:flex-initial px-2 py-1 text-xs font-mono rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100"
                 >
                   {samples.map((s) => (
                     <option key={s.sample_id} value={s.sample_id}>
@@ -291,23 +305,24 @@ export function AiAnalysisAndCompareView({ initialSubView, samples }: Props) {
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-3">
-              <div className="flex items-center justify-between text-xs">
+            <div className="min-w-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                 <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                  Quantitative Feature Deltas (B − A)
+                  {isAr ? 'فروق الخصائص الكمية (ب − أ)' : 'Quantitative Feature Deltas (B − A)'}
                 </h2>
                 <span className="font-mono text-sky-700 dark:text-sky-400 tabular-nums">
                   Cosine Sim {(comparison.stylometric_cosine_similarity * 100).toFixed(1)}% · Jaccard{' '}
                   {(comparison.lexical_jaccard_similarity * 100).toFixed(1)}%
                 </span>
               </div>
-              <table className="w-full text-xs border-collapse font-mono tabular-nums">
+              <div className="overflow-x-auto">
+              <table className="w-full text-xs border-collapse font-mono tabular-nums min-w-[360px]">
                 <thead>
-                  <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 text-left">
-                    <th className="py-1.5 font-medium">Metric</th>
-                    <th className="py-1.5 text-right font-medium">Text A</th>
-                    <th className="py-1.5 text-right font-medium">Text B</th>
-                    <th className="py-1.5 text-right font-medium">Delta</th>
+                  <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 text-start">
+                    <th className="py-1.5 font-medium">{isAr ? 'المقياس' : 'Metric'}</th>
+                    <th className="py-1.5 text-end font-medium">{isAr ? 'النص أ' : 'Text A'}</th>
+                    <th className="py-1.5 text-end font-medium">{isAr ? 'النص ب' : 'Text B'}</th>
+                    <th className="py-1.5 text-end font-medium">{isAr ? 'الفرق' : 'Delta'}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -360,15 +375,16 @@ export function AiAnalysisAndCompareView({ initialSubView, samples }: Props) {
                   ))}
                 </tbody>
               </table>
+              </div>
             </div>
 
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-3">
+            <div className="min-w-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-3">
               <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                Word-Level Structural Diff
+                {isAr ? 'الفروق البنيوية على مستوى الكلمات' : 'Word-Level Structural Diff'}
               </h2>
               <div
                 dir="auto"
-                className="p-3.5 rounded bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs leading-relaxed max-h-80 overflow-y-auto"
+                className="p-3.5 rounded bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs leading-relaxed max-h-80 overflow-y-auto break-words"
               >
                 {comparison.diff_segments.map((seg, idx) =>
                   seg.type === 'equal' ? (

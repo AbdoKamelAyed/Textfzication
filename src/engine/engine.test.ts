@@ -21,6 +21,7 @@ import {
   DEMO_DATASETS,
   DEMO_SAMPLES,
   INITIAL_EXPERIMENTS,
+  INITIAL_EXTERNAL_SOURCES,
   INITIAL_PATTERNS,
 } from './demoCorpus';
 import { runControlledTrainingExperiment } from './training';
@@ -35,6 +36,44 @@ import {
   createImportCollectionJob,
   summarizeCollectionJobs,
 } from './collectionJobs';
+import {
+  detectPromptLanguage,
+  getOriginLabel,
+  LINGUISTIC_GLOSSARY,
+  UI_STRINGS,
+} from './i18n';
+import {
+  generateLocalCopilotReply,
+  generateLocalEditTransform,
+  generateLocalSourceDiscoveryReply,
+} from './copilotFallback';
+import {
+  computeLinguisticChartsData,
+  extractCorpusDictionaryCandidates,
+  LINGUISTIC_SYMBOLS_CATALOG,
+  STARTER_LINGUISTIC_DICTIONARY,
+} from './dictionary';
+import {
+  buildDictionaryCsv,
+  buildDictionaryTsvAnki,
+  buildMdictMddBinary,
+  buildMdictMdxBinary,
+  buildMdictSourceTxt,
+  buildOntoLexJsonLd,
+  buildStarDictBundle,
+  buildTeiP5Xml,
+  buildXdxfXml,
+  computeAdler32,
+} from './dictionaryExport';
+import {
+  REAL_WALKTHROUGH_PRESETS,
+  ZERO_KNOWLEDGE_GUIDE_CHAPTERS,
+} from './documentationData';
+import {
+  buildDeploymentReportMarkdown,
+  DEPLOYMENT_TARGETS,
+  TECHNOLOGY_STACK_INVENTORY,
+} from './deploymentReport';
 
 test('linguistic engine detects English and Arabic RTL dialects accurately', () => {
   const en = detectLanguageAndDialect('Archival digitization preserves maritime correspondence.');
@@ -701,4 +740,161 @@ test('bulkValidation toggles selections, computes filtered stats, and validates 
   assert.equal(v1.validation.verified, true);
   assert.equal(v1.layer, 'approved');
 });
+
+test('i18n provides full EN/AR translation pairs and bilingual glossary definitions', () => {
+  assert.equal(detectPromptLanguage('كيف يختلف تباين الجمل؟', 'en'), 'ar');
+  assert.equal(detectPromptLanguage('Compare burstiness and Guiraud R', 'ar'), 'en');
+  assert.equal(getOriginLabel('ar', 'human'), 'كتابة بشرية خالصة');
+  assert.equal(getOriginLabel('en', 'human'), 'Human Writing');
+  assert.ok(LINGUISTIC_GLOSSARY.length >= 10);
+  for (const term of LINGUISTIC_GLOSSARY) {
+    assert.ok(term.termEn.trim().length > 0 && term.termAr.trim().length > 0);
+    assert.ok(term.plainDefinitionEn.trim().length > 20 && term.plainDefinitionAr.trim().length > 20);
+  }
+  assert.ok(UI_STRINGS.modules.dictionary.ar.length > 0);
+  assert.ok(UI_STRINGS.modules.guide.ar.length > 0);
+});
+
+test('static-hosting deterministic copilot, source discovery, and edit transform fallbacks respond cleanly in EN and AR', () => {
+  const replyEn = generateLocalCopilotReply(
+    'Compare how sentence burstiness and Guiraud R shift when human prose is AI-edited.',
+    {
+      datasets: DEMO_DATASETS,
+      samples: DEMO_SAMPLES,
+      patterns: INITIAL_PATTERNS,
+      experiments: INITIAL_EXPERIMENTS,
+      uiLanguage: 'en',
+    }
+  );
+  assert.equal(replyEn.isStaticFallback, true);
+  assert.ok(replyEn.text.includes('Burstiness CV'));
+  assert.ok(replyEn.groundingSources.length >= 1);
+
+  const replyAr = generateLocalCopilotReply(
+    'ما العوامل المؤثرة في تحليل الفصحى والعامية المصرية؟',
+    {
+      datasets: DEMO_DATASETS,
+      samples: DEMO_SAMPLES,
+      patterns: INITIAL_PATTERNS,
+      experiments: INITIAL_EXPERIMENTS,
+      uiLanguage: 'ar',
+    }
+  );
+  assert.equal(replyAr.isStaticFallback, true);
+  assert.ok(replyAr.text.includes('المساعد البحثي المحلي الحتمي'));
+  assert.ok(replyAr.text.includes('العامية المصرية'));
+
+  const srcRes = generateLocalSourceDiscoveryReply('Arabic M4GT benchmark', INITIAL_EXTERNAL_SOURCES, 'en');
+  assert.ok(srcRes.summary.includes('M4GT-Bench'));
+  assert.ok(srcRes.groundingSources.length >= 3);
+
+  const editRes = generateLocalEditTransform({
+    mode: 'edit',
+    text: 'Nobody expected the dials to fog up! Yet we kept notes—quickly.',
+    instruction: 'Polish into formal academic prose',
+  });
+  assert.ok(editRes.outputText.length > 20);
+  assert.ok(!editRes.outputText.includes('!'));
+});
+
+test('dictionary maker extracts corpus candidates, builds IPA/Arabic symbol tables, and computes linguistic charts', () => {
+  const candidates = extractCorpusDictionaryCandidates(DEMO_SAMPLES, STARTER_LINGUISTIC_DICTIONARY, 8);
+  assert.ok(candidates.length >= 5);
+  assert.ok(candidates.every((c) => c.frequencyInCorpus >= 1 && c.headword.length >= 4));
+
+  assert.ok(LINGUISTIC_SYMBOLS_CATALOG.some((s) => s.group === 'ipa_consonant'));
+  assert.ok(LINGUISTIC_SYMBOLS_CATALOG.some((s) => s.group === 'ipa_vowel'));
+  assert.ok(LINGUISTIC_SYMBOLS_CATALOG.some((s) => s.group === 'arabic_diacritic'));
+  assert.ok(LINGUISTIC_SYMBOLS_CATALOG.some((s) => s.group === 'arabic_phoneme'));
+
+  const charts = computeLinguisticChartsData(STARTER_LINGUISTIC_DICTIONARY, DEMO_SAMPLES);
+  assert.ok(charts.posDistribution.length >= 2);
+  assert.ok(charts.totalAnalyzedTokens > 100);
+  assert.ok(charts.zipfTopTokens.length >= 5);
+  assert.equal(charts.zipfTopTokens[0].rank, 1);
+});
+
+test('dictionary exports generate valid MDict .mdd/.mdx binaries with verified Adler-32 and international XML/TSV formats', () => {
+  const meta = {
+    title: 'TEXTPRINT Bilingual Stylometry Dictionary',
+    description: 'EN-AR computational linguistics lexicon',
+    author: 'TEXTPRINT Lab',
+    createdDate: '2026-11-24',
+  };
+  const subset = STARTER_LINGUISTIC_DICTIONARY.slice(0, 4);
+
+  // 1. Validate binary .mdd header length, UTF-16LE XML payload, and Adler-32 checksum
+  const mdd = buildMdictMddBinary(subset, meta);
+  assert.ok(mdd instanceof Uint8Array);
+  assert.ok(mdd.length > 200);
+  const view = new DataView(mdd.buffer, mdd.byteOffset, mdd.byteLength);
+  const headerLen = view.getUint32(0, false); // big-endian
+  assert.ok(headerLen > 40 && headerLen < mdd.length);
+  const headerBytes = mdd.slice(4, 4 + headerLen);
+  const storedAdlerLe = view.getUint32(4 + headerLen, true);
+  assert.equal(storedAdlerLe, computeAdler32(headerBytes));
+  const decodedHeader = new TextDecoder('utf-16le').decode(headerBytes);
+  assert.ok(decodedHeader.startsWith('<Dictionary GeneratedByEngineVersion="2.0"'));
+  assert.ok(decodedHeader.includes('MDD Media'));
+
+  // 2. Validate binary .mdx header & UTF-16LE encoding + checksum
+  const mdx = buildMdictMdxBinary(subset, meta);
+  const mdxView = new DataView(mdx.buffer, mdx.byteOffset, mdx.byteLength);
+  const mdxHeaderLen = mdxView.getUint32(0, false);
+  const mdxHeaderBytes = mdx.slice(4, 4 + mdxHeaderLen);
+  assert.equal(mdxView.getUint32(4 + mdxHeaderLen, true), computeAdler32(mdxHeaderBytes));
+  const mdxDecodedHeader = new TextDecoder('utf-16le').decode(mdxHeaderBytes);
+  assert.ok(mdxDecodedHeader.includes('Encoding="UTF-8"'));
+
+  // 3. Validate MDict source, XDXF, TEI P5, StarDict, Anki TSV, CSV, JSON-LD
+  const mdxTxt = buildMdictSourceTxt(subset);
+  assert.ok(mdxTxt.includes('stylometry'));
+  assert.ok(mdxTxt.includes('</>'));
+
+  const xdxf = buildXdxfXml(subset, meta);
+  assert.ok(xdxf.includes('<xdxf lang_from="ENG" lang_to="ARA"'));
+  assert.ok(xdxf.includes('<dtrn xml:lang="ar">'));
+
+  const tei = buildTeiP5Xml(subset, meta);
+  assert.ok(tei.includes('<TEI xmlns="http://www.tei-c.org/ns/1.0">'));
+  assert.ok(tei.includes('<pron notation="ipa">'));
+
+  const stardict = buildStarDictBundle(subset, meta);
+  assert.ok(stardict.ifo.includes(`wordcount=${subset.length}`));
+  assert.ok(stardict.dictTxt.includes('\t'));
+
+  const csv = buildDictionaryCsv(subset);
+  assert.ok(csv.startsWith('\uFEFF'));
+  assert.ok(csv.includes('mdd_media_key'));
+
+  const tsv = buildDictionaryTsvAnki(subset);
+  assert.ok(tsv.includes('#separator:tab'));
+
+  const ontolex = JSON.parse(buildOntoLexJsonLd(subset, meta));
+  assert.equal(ontolex['@type'], 'ontolex:Lexicon');
+  assert.equal(ontolex.entries.length, subset.length);
+});
+
+test('interactive guide presets and multi-platform deployment report cover real samples and GH Pages/Firebase/Vercel/Cloud Run', () => {
+  assert.ok(ZERO_KNOWLEDGE_GUIDE_CHAPTERS.length >= 5);
+  assert.ok(REAL_WALKTHROUGH_PRESETS.some((p) => p.language === 'ar'));
+  assert.ok(REAL_WALKTHROUGH_PRESETS.some((p) => p.language === 'en'));
+
+  const targetIds = new Set(DEPLOYMENT_TARGETS.map((t) => t.id));
+  assert.ok(targetIds.has('github_pages'));
+  assert.ok(targetIds.has('firebase_hosting'));
+  assert.ok(targetIds.has('vercel'));
+  assert.ok(targetIds.has('cloud_run'));
+  assert.ok(TECHNOLOGY_STACK_INVENTORY.length >= 4);
+
+  const mdEn = buildDeploymentReportMarkdown('en');
+  assert.ok(mdEn.includes('GitHub Pages'));
+  assert.ok(mdEn.includes('Firebase Hosting'));
+  assert.ok(mdEn.includes('Vercel'));
+  assert.ok(mdEn.includes('Cloud Run'));
+
+  const mdAr = buildDeploymentReportMarkdown('ar');
+  assert.ok(mdAr.includes('تقرير البنية التقنية'));
+});
+
 
