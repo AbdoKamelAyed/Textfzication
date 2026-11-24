@@ -99,35 +99,45 @@ export const DEPLOYMENT_TARGETS: DeploymentTargetSpec[] = [
     requiresBackendAr: [
       'تحليل Gemini السحابي المباشر والبحث الموثق عبر Google (يمكن ربط رابط Cloud Run من شاشة 14)',
     ],
-    buildCommand: 'npm ci && npm run build',
+    buildCommand: 'npm install --legacy-peer-deps && npm run build',
     publishDirOrEntry: 'dist/',
     configFilename: '.github/workflows/deploy-pages.yml',
-    configSnippet: `# GitHub Pages static build (set base in vite.config.ts if deploying to /<repo>/)
-# vite.config.ts: base: process.env.VITE_BASE_PATH || '/'
-name: Deploy TEXTPRINT to GitHub Pages
+    configSnippet: `# GitHub Pages static build (vite.config.ts reads VITE_BASE_PATH and .npmrc sets legacy-peer-deps=true)
+name: Deploy TEXTPRINT Static Build to GitHub Pages
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
 jobs:
-  build_and_deploy:
+  build:
     runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
-      - run: npm ci
-      - run: npm test
-      - run: npm run build
+          node-version: '22'
+      - id: pages
+        uses: actions/configure-pages@v5
+      - run: if [ -f package-lock.json ]; then npm ci --legacy-peer-deps; else npm install --legacy-peer-deps; fi
+      - run: npm run build && cp dist/index.html dist/404.html && touch dist/.nojekyll
         env:
-          VITE_BASE_PATH: /\${{ github.event.repository.name }}/
+          VITE_BASE_PATH: \${{ steps.pages.outputs.base_path || '/' }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: ./dist
-      - uses: actions/deploy-pages@v4`,
+  deploy:
+    environment:
+      name: github-pages
+      url: \${{ steps.deployment.outputs.page_url }}
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4`,
     stepsEn: [
       'Enable Settings -> Pages -> Source: GitHub Actions in your repository.',
       'Ensure Vite base matches your repository subpath (e.g. VITE_BASE_PATH=/textprint/) if not using a custom domain.',

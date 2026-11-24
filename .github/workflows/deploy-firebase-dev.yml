@@ -18,16 +18,29 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --legacy-peer-deps
+          else
+            npm install --legacy-peer-deps
+          fi
 
       - name: Typecheck & Unit Tests
         run: npm run lint && npm test
 
       - name: Build static bundle
         run: npm run build
+
+      - name: Verify Firebase service account secret is configured
+        env:
+          FIREBASE_SA: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0224046879 }}
+        run: |
+          if [ -z "$FIREBASE_SA" ]; then
+            echo "::error::Missing repository secret FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0224046879. Add it in GitHub Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
 
       - name: Deploy to Firebase Hosting Dev Channel
         uses: FirebaseExtended/action-hosting-deploy@v0
