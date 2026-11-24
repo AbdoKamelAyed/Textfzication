@@ -74,6 +74,16 @@ import {
   DEPLOYMENT_TARGETS,
   TECHNOLOGY_STACK_INVENTORY,
 } from './deploymentReport';
+import {
+  computeExecutiveAdminSnapshot,
+  formatFirebaseAuthErrorMessage,
+} from './adminDashboard';
+import {
+  claimInitialAdminPasscode,
+  getAdminAuthStatus,
+  verifyAdminBearerToken,
+  verifyAdminPasscode,
+} from '../lib/adminAuth';
 
 test('linguistic engine detects English and Arabic RTL dialects accurately', () => {
   const en = detectLanguageAndDialect('Archival digitization preserves maritime correspondence.');
@@ -897,4 +907,64 @@ test('interactive guide presets and multi-platform deployment report cover real 
   assert.ok(mdAr.includes('تقرير البنية التقنية'));
 });
 
+test('adminDashboard computes executive snapshot and formats unauthorized-domain auth guidance in EN & AR', () => {
+  const snap = computeExecutiveAdminSnapshot({
+    datasets: DEMO_DATASETS,
+    samples: DEMO_SAMPLES,
+    patterns: INITIAL_PATTERNS,
+    experiments: INITIAL_EXPERIMENTS,
+    jobs: [],
+    auditLogs: [],
+  });
+  assert.equal(snap.totalSamples, DEMO_SAMPLES.length);
+  assert.ok(snap.moderationQueue.length >= 1);
+  assert.equal(snap.latestF1Score, 82.5);
+
+  const enGuidance = formatFirebaseAuthErrorMessage(
+    'Firebase: Error (auth/unauthorized-domain).',
+    'abdokamelayed.github.io',
+    'en'
+  );
+  assert.equal(enGuidance.isUnauthorizedDomain, true);
+  assert.equal(enGuidance.hostname, 'abdokamelayed.github.io');
+  assert.ok(enGuidance.message.includes('abdokamelayed.github.io'));
+
+  const arGuidance = formatFirebaseAuthErrorMessage(
+    'Firebase: Error (auth/unauthorized-domain).',
+    'abdokamelayed.github.io',
+    'ar'
+  );
+  assert.equal(arGuidance.isUnauthorizedDomain, true);
+  assert.ok(arGuidance.title.includes('Firebase'));
+});
+
+test('server adminAuth handles scrypt first-run passcode claim, verification, and Bearer token validation', () => {
+  const initialStatus = getAdminAuthStatus();
+  assert.equal(initialStatus.needsFirstRunSetup, true);
+
+  const tooShort = claimInitialAdminPasscode('short', 'Tester');
+  assert.equal(tooShort.ok, false);
+
+  const claimed = claimInitialAdminPasscode('TextPrintAdmin#2026', 'Primary Admin');
+  assert.equal(claimed.ok, true);
+  if (!claimed.ok) return;
+
+  assert.equal(verifyAdminPasscode('TextPrintAdmin#2026'), true);
+  assert.equal(verifyAdminPasscode('WrongPasscode123'), false);
+
+  const verifiedPayload = verifyAdminBearerToken(claimed.token);
+  assert.ok(verifiedPayload);
+  assert.equal(verifiedPayload.role, 'admin');
+  assert.equal(verifiedPayload.sub, 'Primary Admin');
+
+  // Re-claiming must lock cleanly with 409
+  const secondClaim = claimInitialAdminPasscode('AnotherPass#2026', 'Attacker');
+  assert.equal(secondClaim.ok, false);
+  if (!secondClaim.ok) {
+    assert.equal(secondClaim.status, 409);
+  }
+
+  // Tampered token must fail verification
+  assert.equal(verifyAdminBearerToken(`${claimed.token}tamper`), null);
+});
 

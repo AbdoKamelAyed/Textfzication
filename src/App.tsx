@@ -18,11 +18,13 @@ import {
   Network,
   Radar,
   Settings,
+  Shield,
   ShieldCheck,
   Sparkles,
   Sun,
   X,
 } from 'lucide-react';
+import { AdminDashboardView } from './components/AdminDashboardView';
 import { AiAnalysisAndCompareView } from './components/AiAnalysisAndCompareView';
 import { DataAcquisitionView } from './components/DataAcquisitionView';
 import { DatasetManagementView } from './components/DatasetManagementView';
@@ -36,6 +38,7 @@ import { ReportsAndCopilotView } from './components/ReportsAndCopilotView';
 import { ResearchDashboard, type ModuleId } from './components/ResearchDashboard';
 import { TrainingAndExperimentsView } from './components/TrainingAndExperimentsView';
 import { VisualIntelligenceView } from './components/VisualIntelligenceView';
+import { formatFirebaseAuthErrorMessage } from './engine/adminDashboard';
 import { UI_STRINGS } from './engine/i18n';
 import { useI18n } from './lib/i18nContext';
 import { applyBulkSampleValidation } from './engine/bulkValidation';
@@ -73,6 +76,7 @@ import type {
   WritingPattern,
 } from './engine/types';
 import {
+  checkIsAdminUser,
   getFreshIdToken,
   signInWithGoogle,
   signOutGoogle,
@@ -135,6 +139,7 @@ const NAV_GROUP_DEFS: Array<{
     items: [
       { id: 'reports', moduleKey: 'reports', icon: Sparkles },
       { id: 'copilot', moduleKey: 'copilot', icon: Bot },
+      { id: 'admin_portal', moduleKey: 'admin_portal', icon: Shield },
       { id: 'governance', moduleKey: 'governance', icon: Settings },
     ],
   },
@@ -166,6 +171,12 @@ export default function App() {
   // Auth & Runtime State
   const [user, setUser] = useState<User | null>(null);
   const [hasDriveToken, setHasDriveToken] = useState(false);
+  const [isFirebaseAdmin, setIsFirebaseAdmin] = useState(false);
+  const [serverAdminSession, setServerAdminSession] = useState<{
+    token: string;
+    subject: string;
+    expiresAt: string;
+  } | null>(null);
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [firestoreConnected, setFirestoreConnected] = useState<boolean | null>(null);
@@ -266,6 +277,9 @@ export default function App() {
       setUser(authUser);
       setHasDriveToken(driveReady);
       if (authUser) {
+        checkIsAdminUser(authUser)
+          .then((ok) => setIsFirebaseAdmin(ok))
+          .catch(() => setIsFirebaseAdmin(false));
         syncUserProfileToFirestore(authUser, theme).catch(() => {});
         getFreshIdToken()
           .then((token) => {
@@ -279,6 +293,8 @@ export default function App() {
             }).catch(() => {});
           })
           .catch(() => {});
+      } else {
+        setIsFirebaseAdmin(false);
       }
     });
   }, []);
@@ -693,13 +709,38 @@ export default function App() {
               </span>
             </div>
 
-            <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+            <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0 shrink-0">
+              <button
+                type="button"
+                data-testid="admin-portal-btn"
+                onClick={() => setActiveModule('admin_portal')}
+                aria-label={isAr ? 'لوحة دخول المشرف' : 'Open Admin Login & Dashboard'}
+                className={`inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-1.5 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 ${
+                  isFirebaseAdmin || serverAdminSession
+                    ? 'border-emerald-400 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-200'
+                    : activeModule === 'admin_portal'
+                      ? 'border-slate-900 dark:border-slate-200 bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900'
+                      : 'border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
+                }`}
+              >
+                <Shield className="w-3.5 h-3.5 shrink-0" />
+                <span className="hidden md:inline">
+                  {isFirebaseAdmin || serverAdminSession
+                    ? isAr
+                      ? 'لوحة المشرف'
+                      : 'Admin'
+                    : isAr
+                      ? 'دخول المشرف'
+                      : 'Admin Login'}
+                </span>
+              </button>
+
               <button
                 type="button"
                 data-testid="lang-toggle-btn"
                 onClick={toggleLang}
                 aria-label={isAr ? 'Switch interface to English' : 'تبديل الواجهة إلى العربية'}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md border border-sky-300 dark:border-sky-700 bg-sky-50/70 dark:bg-sky-950/40 text-sky-800 dark:text-sky-200 hover:bg-sky-100 dark:hover:bg-sky-900/60 transition-colors whitespace-nowrap shrink-0"
+                className="inline-flex items-center gap-1 px-2 sm:px-2.5 py-1.5 text-xs font-medium rounded-md border border-sky-300 dark:border-sky-700 bg-sky-50/70 dark:bg-sky-950/40 text-sky-800 dark:text-sky-200 hover:bg-sky-100 dark:hover:bg-sky-900/60 transition-colors whitespace-nowrap shrink-0"
               >
                 <Languages className="w-3.5 h-3.5 shrink-0" />
                 <span>{t(UI_STRINGS.actions.switchLang)}</span>
@@ -709,7 +750,7 @@ export default function App() {
                 type="button"
                 onClick={() => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))}
                 aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0"
+                className="inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-1.5 text-xs font-medium rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0"
               >
                 {theme === 'dark' ? (
                   <Sun className="w-3.5 h-3.5" />
@@ -731,18 +772,45 @@ export default function App() {
             </div>
           </header>
 
-          {authError && (
-            <div className="mx-4 sm:mx-6 mt-4 px-4 py-2.5 text-xs text-rose-700 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 rounded-md flex items-center justify-between gap-2">
-              <span className="break-words min-w-0">{authError}</span>
-              <button
-                type="button"
-                onClick={() => setAuthError(null)}
-                className="underline shrink-0"
-              >
-                {t(UI_STRINGS.actions.dismiss)}
-              </button>
-            </div>
-          )}
+          {authError && (() => {
+            const hostname =
+              typeof window !== 'undefined' ? window.location.hostname || 'localhost' : 'localhost';
+            const guidance = formatFirebaseAuthErrorMessage(authError, hostname, lang);
+            return (
+              <div className="mx-4 sm:mx-6 mt-4 px-4 py-3 text-xs text-rose-800 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 rounded-md flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5">
+                <div className="space-y-1 min-w-0">
+                  <p className="font-semibold">{guidance.title}</p>
+                  <p className="break-words">{guidance.message}</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  {guidance.isUnauthorizedDomain && (
+                    <a
+                      href={guidance.consoleUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-2.5 py-1 rounded bg-rose-700 text-white hover:bg-rose-800 whitespace-nowrap"
+                    >
+                      {isAr ? 'فتح إعدادات النطاقات' : 'Authorize Domain'}
+                    </a>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setActiveModule('admin_portal')}
+                    className="px-2.5 py-1 rounded border border-rose-300 dark:border-rose-800 bg-white dark:bg-slate-900 hover:bg-rose-100 dark:hover:bg-rose-900/40 whitespace-nowrap"
+                  >
+                    {isAr ? 'بوابة المشرف' : 'Admin Portal'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAuthError(null)}
+                    className="underline shrink-0"
+                  >
+                    {t(UI_STRINGS.actions.dismiss)}
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
 
           <main className="flex-1 p-4 sm:p-6 max-w-7xl w-full mx-auto min-w-0">
             {activeModule === 'dashboard' && (
@@ -847,6 +915,35 @@ export default function App() {
                 onResetDemoWorkspace={handleResetDemoWorkspace}
                 onClearIndexedDb={handleClearIndexedDb}
                 onSignIn={handleSignIn}
+                onLogAudit={appendAudit}
+              />
+            )}
+
+            {activeModule === 'admin_portal' && (
+              <AdminDashboardView
+                user={user}
+                isFirebaseAdmin={isFirebaseAdmin}
+                authError={authError}
+                onSignInGoogle={handleSignIn}
+                onSignOutGoogle={handleSignOut}
+                serverAdminToken={serverAdminSession?.token ?? null}
+                serverAdminMeta={
+                  serverAdminSession
+                    ? { subject: serverAdminSession.subject, expiresAt: serverAdminSession.expiresAt }
+                    : null
+                }
+                onServerAdminLoginSuccess={(token, subject, expiresAt) =>
+                  setServerAdminSession({ token, subject, expiresAt })
+                }
+                onServerAdminLogout={() => setServerAdminSession(null)}
+                datasets={datasets}
+                samples={samples}
+                patterns={patterns}
+                experiments={experiments}
+                jobs={jobs}
+                auditLogs={auditLogs}
+                onValidateSample={handleValidateSample}
+                onNavigate={setActiveModule}
                 onLogAudit={appendAudit}
               />
             )}

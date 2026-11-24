@@ -86,11 +86,18 @@ export function GoogleSignInButton({
           </svg>
         </div>
         <span className="gsi-material-button-contents">
-          {isSigningIn
-            ? isAr
-              ? 'جارٍ تسجيل الدخول...'
-              : 'Signing in...'
-            : t(UI_STRINGS.actions.signInGoogle)}
+          {isSigningIn ? (
+            isAr ? (
+              'جارٍ الدخول...'
+            ) : (
+              'Signing in...'
+            )
+          ) : (
+            <>
+              <span className="sm:hidden">{isAr ? 'دخول Google' : 'Google'}</span>
+              <span className="hidden sm:inline">{t(UI_STRINGS.actions.signInGoogle)}</span>
+            </>
+          )}
         </span>
       </div>
     </button>

@@ -5,6 +5,17 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { requireAuth, optionalAuth, type AuthRequest } from './src/middleware/auth.ts';
+import { adminAuth } from './src/lib/firebase-admin.ts';
+import {
+  claimInitialAdminPasscode,
+  clearFailedAttempts,
+  getAdminAuthStatus,
+  isRateLimited,
+  issueAdminBearerToken,
+  recordFailedAttempt,
+  verifyAdminBearerToken,
+  verifyAdminPasscode,
+} from './src/lib/adminAuth.ts';
 import { getOrCreateUser } from './src/db/users.ts';
 import { isSqlAvailable } from './src/db/index.ts';
 import {
@@ -161,6 +172,115 @@ app.post('/api/auth/sync', requireAuth, async (req: AuthRequest, res) => {
     console.error('Auth sync error:', error);
     res.status(500).json({ error: 'Failed to synchronize user.' });
   }
+});
+
+// Express Admin Authentication & Protected Overview Telemetry
+app.get('/api/admin/status', (_req, res) => {
+  res.json({
+    ok: true,
+    ...getAdminAuthStatus(),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.post('/api/admin/claim', (req, res) => {
+  const passcode = typeof req.body?.passcode === 'string' ? req.body.passcode : '';
+  const adminLabel = typeof req.body?.label === 'string' ? req.body.label : 'Primary Admin';
+  const result = claimInitialAdminPasscode(passcode, adminLabel);
+  if (!result.ok) {
+    return res.status(result.status).json({ error: result.error });
+  }
+  return res.json({
+    ok: true,
+    token: result.token,
+    expiresAt: result.expiresAt,
+    role: 'admin',
+    authMethod: 'server-passcode',
+  });
+});
+
+app.post('/api/admin/login', (req, res) => {
+  const clientKey = String(req.ip || req.headers['x-forwarded-for'] || 'unknown');
+  if (isRateLimited(clientKey)) {
+    return res.status(429).json({
+      error: 'Too many failed admin login attempts. Please wait 15 minutes and try again.',
+    });
+  }
+
+  const status = getAdminAuthStatus();
+  if (status.needsFirstRunSetup) {
+    return res.status(409).json({
+      error: 'Admin passcode has not been configured yet. Complete first-run admin setup first.',
+      needsFirstRunSetup: true,
+    });
+  }
+
+  const passcode = typeof req.body?.passcode === 'string' ? req.body.passcode : '';
+  if (!verifyAdminPasscode(passcode)) {
+    recordFailedAttempt(clientKey);
+    return res.status(401).json({ error: 'Invalid admin passcode.' });
+  }
+
+  clearFailedAttempts(clientKey);
+  const label = typeof req.body?.label === 'string' && req.body.label.trim()
+    ? req.body.label.trim()
+    : 'Server Admin';
+  const issued = issueAdminBearerToken(label);
+  return res.json({
+    ok: true,
+    token: issued.token,
+    expiresAt: issued.expiresAt,
+    role: 'admin',
+    authMethod: 'server-passcode',
+  });
+});
+
+app.get('/api/admin/overview', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Admin Bearer authorization is required.' });
+  }
+  const token = authHeader.slice('Bearer '.length).trim();
+
+  let verifiedSubject: string | null = null;
+  let authMethod: 'server-passcode' | 'firebase-admin' = 'server-passcode';
+
+  const adminPayload = verifyAdminBearerToken(token);
+  if (adminPayload) {
+    verifiedSubject = adminPayload.sub;
+    authMethod = 'server-passcode';
+  } else {
+    try {
+      const decoded = await adminAuth.verifyIdToken(token);
+      if (
+        decoded.email_verified &&
+        decoded.email?.toLowerCase() === 'abdokamel200514@gmail.com'
+      ) {
+        verifiedSubject = decoded.email;
+        authMethod = 'firebase-admin';
+      }
+    } catch {
+      // Invalid Firebase token
+    }
+  }
+
+  if (!verifiedSubject) {
+    return res.status(403).json({ error: 'Admin privileges required.' });
+  }
+
+  return res.json({
+    ok: true,
+    subject: verifiedSubject,
+    authMethod,
+    nodeVersion: process.version,
+    environment: process.env.NODE_ENV || 'development',
+    uptimeSeconds: Math.floor(process.uptime()),
+    memoryMb: Math.round(process.memoryUsage().rss / 1048576),
+    geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
+    sqlConfigured: await isSqlAvailable(),
+    adminAuthStatus: getAdminAuthStatus(),
+    timestamp: new Date().toISOString(),
+  });
 });
 
 // Protected DB mutation routes

@@ -178,6 +178,7 @@ export const UI_STRINGS = {
     reports: { en: '12. Reports & Deployment', ar: '12. التقارير والنشر' },
     copilot: { en: '13. AI Research Copilot', ar: '13. المساعد البحثي الذكي' },
     governance: { en: '14. Admin & Governance', ar: '14. الإدارة والحوكمة' },
+    admin_portal: { en: '00. Admin Login & Dashboard', ar: '00. دخول المشرف واللوحة الخاصة' },
     dictionary: { en: '15. Dictionary & Symbols', ar: '15. صانع القواميس والرموز' },
     guide: { en: '16. Interactive Guide', ar: '16. الدليل التفاعلي للمبتدئين' },
   },

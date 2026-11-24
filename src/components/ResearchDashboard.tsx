@@ -40,6 +40,7 @@ export type ModuleId =
   | 'reports'
   | 'copilot'
   | 'governance'
+  | 'admin_portal'
   | 'dictionary'
   | 'guide';
 
