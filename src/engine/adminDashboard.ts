@@ -161,3 +161,54 @@ export function formatFirebaseAuthErrorMessage(
     message: rawError,
   };
 }
+
+/**
+ * Detects private/special admin access routes (?portal=admin, ?admin=1, #/admin, #admin, or /admin)
+ * that open the Special Admin Login Gate without exposing a public button or nav item.
+ */
+export function isSpecialAdminUrlEntry(
+  search: string,
+  hash: string,
+  pathname = ''
+): boolean {
+  const cleanSearch = (search || '').trim();
+  if (cleanSearch) {
+    try {
+      const params = new URLSearchParams(cleanSearch.startsWith('?') ? cleanSearch.slice(1) : cleanSearch);
+      const portal = params.get('portal')?.toLowerCase();
+      const adminFlag = params.get('admin')?.toLowerCase();
+      const access = params.get('access')?.toLowerCase();
+      if (portal === 'admin' || adminFlag === '1' || adminFlag === 'true' || access === 'admin') {
+        return true;
+      }
+    } catch {
+      // Ignore malformed query strings
+    }
+  }
+
+  const normalizedHash = (hash || '').trim().toLowerCase();
+  if (
+    normalizedHash === '#/admin' ||
+    normalizedHash === '#admin' ||
+    normalizedHash.startsWith('#/admin?') ||
+    normalizedHash.startsWith('#/admin/')
+  ) {
+    return true;
+  }
+
+  const normalizedPath = (pathname || '').trim().toLowerCase().replace(/\/+$/, '');
+  if (normalizedPath === '/admin' || normalizedPath.endsWith('/admin')) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Admin portal navigation links remain hidden from public visitors unless the session
+ * is already authenticated as an administrator.
+ */
+export function canShowAdminNavEntry(isAuthenticatedAdmin: boolean): boolean {
+  return Boolean(isAuthenticatedAdmin);
+}
+

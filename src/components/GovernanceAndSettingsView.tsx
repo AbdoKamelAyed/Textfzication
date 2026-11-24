@@ -30,7 +30,6 @@ import type {
   WritingPattern,
 } from '../engine/types';
 import {
-  BOOTSTRAP_ADMIN_EMAIL,
   checkIsAdminUser,
   grantAdminAccess,
   listFirestoreAdmins,
@@ -504,7 +503,7 @@ export function GovernanceAndSettingsView({
                 </h2>
               </div>
               <span className="text-xs font-mono text-slate-500 dark:text-slate-400">
-                Bootstrap Admin: {BOOTSTRAP_ADMIN_EMAIL}
+                RBAC: Firestore /admins Allowlist
               </span>
             </div>
 
@@ -668,7 +667,7 @@ export function GovernanceAndSettingsView({
                     Admin Authentication Required to Manage Firestore Users
                   </p>
                   <p className="text-xs text-slate-600 dark:text-slate-400">
-                    Sign in with an authorized Google admin account (<span className="font-mono">{BOOTSTRAP_ADMIN_EMAIL}</span> or an account listed in <span className="font-mono">/admins</span>) to view user profiles, assign <span className="font-mono">researcher / reviewer / admin</span> roles, or suspend accounts.
+                    Sign in with an authorized Google administrator account listed in <span className="font-mono">/admins</span> to view user profiles, assign <span className="font-mono">researcher / reviewer / admin</span> roles, or suspend accounts.
                   </p>
                 </div>
                 <button

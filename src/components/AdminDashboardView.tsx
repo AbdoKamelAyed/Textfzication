@@ -36,7 +36,6 @@ import type {
 } from '../engine/types';
 import { getConfiguredApiBaseUrl, setConfiguredApiBaseUrl } from '../lib/apiBase';
 import {
-  BOOTSTRAP_ADMIN_EMAIL,
   getFreshIdToken,
   grantAdminAccess,
   listFirestoreAdmins,
@@ -429,24 +428,31 @@ export function AdminDashboardView({
                 <Shield className="w-4 h-4 shrink-0" />
                 <span>
                   {t({
-                    en: 'RESTRICTED LABORATORY CONSOLE',
-                    ar: 'بوابة الإدارة المقيدة',
+                    en: 'SPECIAL AUTHORIZED ACCESS ONLY',
+                    ar: 'دخول خاص ومقيّد للمشرفين فقط',
                   })}
                 </span>
               </div>
               <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-100 break-words">
                 {t({
-                  en: '00. Admin Login & Executive Dashboard',
-                  ar: '00. تسجيل دخول المشرف ولوحة التحكم الخاصة',
+                  en: 'Special Administrator Login',
+                  ar: 'بوابة الدخول الخاصة بالمشرف',
                 })}
               </h1>
               <p className="text-sm text-slate-600 dark:text-slate-400 max-w-3xl break-words">
                 {t({
-                  en: 'Authenticate as a verified administrator via Google RBAC or Express server passcode to unlock corpus moderation, user role controls, and real-time runtime telemetry.',
-                  ar: 'سجّل الدخول بصلاحيات المشرف عبر Google RBAC أو كلمة مرور خادم Express لفتح لوحة المشرف الخاصة وإدارة المستخدمين واعتماد العينات.',
+                  en: 'Private executive portal (hidden from public navigation). Authenticate with an authorized administrator Google account or server admin passcode to unlock moderation, user RBAC, and runtime telemetry.',
+                  ar: 'بوابة إدارية خاصة غير ظاهرة للعامة. سجّل الدخول بحساب المشرف المخوّل أو كلمة مرور الخادم لفتح لوحة التحكم التنفيذية وإدارة الصلاحيات.',
                 })}
               </p>
             </div>
+            <button
+              type="button"
+              onClick={() => onNavigate('dashboard')}
+              className="px-3 py-1.5 text-xs font-medium rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 shrink-0"
+            >
+              {t({ en: 'Return to Lab', ar: 'العودة إلى المختبر' })}
+            </button>
           </div>
         </div>
 
@@ -511,8 +517,8 @@ export function AdminDashboardView({
 
               <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed break-words">
                 {t({
-                  en: `Verified Google accounts matching bootstrap admin (${BOOTSTRAP_ADMIN_EMAIL}) or listed in Firestore /admins automatically unlock full user management and executive dashboard controls.`,
-                  ar: `الحساب الموثق عبر Google المطابق للبريد الأساسي (${BOOTSTRAP_ADMIN_EMAIL}) أو المدرج في مجموعة /admins يفتح لوحة المشرف الكاملة وإدارة أدوار المستخدمين.`,
+                  en: 'Verified Google accounts listed in the Firestore /admins allowlist automatically unlock full user management and executive dashboard controls.',
+                  ar: 'حسابات Google الموثّقة والمدرجة في قائمة المشرفين المعتمدة تفتح لوحة المشرف الخاصة وإدارة أدوار المستخدمين تلقائياً.',
                 })}
               </p>
 
@@ -1000,8 +1006,8 @@ export function AdminDashboardView({
             <div className="p-4 rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs">
               <p className="text-slate-700 dark:text-slate-300 break-words">
                 {t({
-                  en: `You unlocked the dashboard with Server Passcode. To read or modify Firestore /users and /admins documents, also sign in with Google (${BOOTSTRAP_ADMIN_EMAIL}).`,
-                  ar: `تم الدخول عبر كلمة مرور الخادم. لقراءة أو تعديل مستخدمي Firestore مباشرة، سجّل الدخول أيضاً بحساب Google (${BOOTSTRAP_ADMIN_EMAIL}).`,
+                  en: 'You unlocked the dashboard with Server Passcode. To read or modify Firestore /users and /admins documents, also sign in with an authorized Google administrator account.',
+                  ar: 'تم الدخول عبر كلمة مرور الخادم. لقراءة أو تعديل مستخدمي Firestore مباشرة، سجّل الدخول أيضاً بحساب Google المشرف المخوّل.',
                 })}
               </p>
               <button

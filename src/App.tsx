@@ -38,7 +38,11 @@ import { ReportsAndCopilotView } from './components/ReportsAndCopilotView';
 import { ResearchDashboard, type ModuleId } from './components/ResearchDashboard';
 import { TrainingAndExperimentsView } from './components/TrainingAndExperimentsView';
 import { VisualIntelligenceView } from './components/VisualIntelligenceView';
-import { formatFirebaseAuthErrorMessage } from './engine/adminDashboard';
+import {
+  canShowAdminNavEntry,
+  formatFirebaseAuthErrorMessage,
+  isSpecialAdminUrlEntry,
+} from './engine/adminDashboard';
 import { UI_STRINGS } from './engine/i18n';
 import { useI18n } from './lib/i18nContext';
 import { applyBulkSampleValidation } from './engine/bulkValidation';
@@ -148,7 +152,15 @@ const NAV_GROUP_DEFS: Array<{
 export default function App() {
   const { lang, toggleLang, t } = useI18n();
   const isAr = lang === 'ar';
-  const [activeModule, setActiveModule] = useState<ModuleId>('dashboard');
+  const [activeModule, setActiveModule] = useState<ModuleId>(() => {
+    if (
+      typeof window !== 'undefined' &&
+      isSpecialAdminUrlEntry(window.location.search, window.location.hash, window.location.pathname)
+    ) {
+      return 'admin_portal';
+    }
+    return 'dashboard';
+  });
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     if (typeof window !== 'undefined') {
@@ -186,6 +198,7 @@ export default function App() {
     sqlConfigured: boolean;
   } | null>(null);
   const jobTimersRef = useRef<number[]>([]);
+  const versionTapRef = useRef<{ count: number; lastTapMs: number }>({ count: 0, lastTapMs: 0 });
 
   useEffect(() => {
     return () => {
@@ -194,6 +207,64 @@ export default function App() {
       }
     };
   }, []);
+
+  // Special private entry listeners: URL route (#/admin, ?portal=admin) & keyboard shortcut (Ctrl/Cmd+Shift+A)
+  useEffect(() => {
+    const syncSpecialRoute = () => {
+      if (isSpecialAdminUrlEntry(window.location.search, window.location.hash, window.location.pathname)) {
+        setActiveModule('admin_portal');
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        setActiveModule('admin_portal');
+      }
+    };
+    window.addEventListener('hashchange', syncSpecialRoute);
+    window.addEventListener('popstate', syncSpecialRoute);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('hashchange', syncSpecialRoute);
+      window.removeEventListener('popstate', syncSpecialRoute);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, []);
+
+  const handleDiscreetVersionTap = () => {
+    const now = Date.now();
+    if (now - versionTapRef.current.lastTapMs > 2500) {
+      versionTapRef.current = { count: 1, lastTapMs: now };
+      return;
+    }
+    const nextCount = versionTapRef.current.count + 1;
+    versionTapRef.current = { count: nextCount, lastTapMs: now };
+    if (nextCount >= 5) {
+      versionTapRef.current = { count: 0, lastTapMs: 0 };
+      setActiveModule('admin_portal');
+    }
+  };
+
+  const exitAdminPortalToLab = () => {
+    if (
+      typeof window !== 'undefined' &&
+      isSpecialAdminUrlEntry(window.location.search, window.location.hash, window.location.pathname)
+    ) {
+      try {
+        const cleanUrl = new URL(window.location.href);
+        cleanUrl.searchParams.delete('portal');
+        cleanUrl.searchParams.delete('admin');
+        cleanUrl.searchParams.delete('access');
+        if (cleanUrl.hash.toLowerCase().includes('admin')) {
+          cleanUrl.hash = '';
+        }
+        window.history.replaceState({}, '', `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
+      } catch {
+        // Ignore history restrictions
+      }
+    }
+    setActiveModule('dashboard');
+  };
 
   // Apply Tailwind v4 dark class
   useEffect(() => {
@@ -343,7 +414,11 @@ export default function App() {
     await signOutGoogle();
     setUser(null);
     setHasDriveToken(false);
+    setIsFirebaseAdmin(false);
     appendAudit('RESEARCHER_SIGN_OUT', 'auth', 'session', 'Signed out of cloud session.');
+    if (!serverAdminSession && activeModule === 'admin_portal') {
+      exitAdminPortalToLab();
+    }
   };
 
   const handleImportSamples = async (dataset: DatasetRecord, newSamples: TextSample[]) => {
@@ -575,18 +650,25 @@ export default function App() {
     appendAudit('CLEAR_INDEXEDDB', 'storage', 'indexeddb', 'Cleared local browser IndexedDB stores.');
   };
 
+  const isAuthenticatedAdmin = isFirebaseAdmin || Boolean(serverAdminSession);
+  const showAdminSidebarItem = canShowAdminNavEntry(isAuthenticatedAdmin);
+
   const navGroups = NAV_GROUP_DEFS.map((g) => ({
     heading: t(UI_STRINGS.navGroups[g.headingKey]),
-    items: g.items.map((item) => ({
-      id: item.id,
-      label: t(UI_STRINGS.modules[item.moduleKey]),
-      icon: item.icon,
-    })),
+    items: g.items
+      .filter((item) => item.id !== 'admin_portal' || showAdminSidebarItem)
+      .map((item) => ({
+        id: item.id,
+        label: t(UI_STRINGS.modules[item.moduleKey]),
+        icon: item.icon,
+      })),
   }));
 
   const activeNavLabel =
-    navGroups.flatMap((g) => g.items).find((item) => item.id === activeModule)?.label ??
-    'TEXTPRINT Laboratory';
+    activeModule === 'admin_portal'
+      ? t(UI_STRINGS.modules.admin_portal)
+      : navGroups.flatMap((g) => g.items).find((item) => item.id === activeModule)?.label ??
+        'TEXTPRINT Laboratory';
 
   return (
     <ErrorBoundary>
@@ -594,7 +676,7 @@ export default function App() {
         {/* Desktop Sidebar */}
         <aside className="hidden lg:flex lg:w-64 lg:flex-col lg:fixed lg:inset-y-0 lg:start-0 border-e border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
           <div className="h-14 px-5 flex items-center justify-between border-b border-slate-200 dark:border-slate-800">
-            <div className="min-w-0 truncate">
+            <div className="min-w-0 truncate select-none" onClick={handleDiscreetVersionTap}>
               <span className="font-mono text-sm font-semibold tracking-tight text-slate-900 dark:text-slate-50">
                 TEXTPRINT
               </span>
@@ -647,7 +729,9 @@ export default function App() {
             />
             <aside className="relative w-72 max-w-[82vw] bg-white dark:bg-slate-900 border-e border-slate-200 dark:border-slate-800 flex flex-col z-50">
               <div className="h-14 px-4 flex items-center justify-between border-b border-slate-200 dark:border-slate-800">
-                <span className="font-mono text-sm font-semibold">TEXTPRINT</span>
+                <span className="font-mono text-sm font-semibold select-none" onClick={handleDiscreetVersionTap}>
+                  TEXTPRINT
+                </span>
                 <button
                   type="button"
                   onClick={() => setMobileNavOpen(false)}
@@ -710,30 +794,20 @@ export default function App() {
             </div>
 
             <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0 shrink-0">
-              <button
-                type="button"
-                data-testid="admin-portal-btn"
-                onClick={() => setActiveModule('admin_portal')}
-                aria-label={isAr ? 'لوحة دخول المشرف' : 'Open Admin Login & Dashboard'}
-                className={`inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-1.5 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 ${
-                  isFirebaseAdmin || serverAdminSession
-                    ? 'border-emerald-400 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-200'
-                    : activeModule === 'admin_portal'
-                      ? 'border-slate-900 dark:border-slate-200 bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900'
-                      : 'border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
-                }`}
-              >
-                <Shield className="w-3.5 h-3.5 shrink-0" />
-                <span className="hidden md:inline">
-                  {isFirebaseAdmin || serverAdminSession
-                    ? isAr
-                      ? 'لوحة المشرف'
-                      : 'Admin'
-                    : isAr
-                      ? 'دخول المشرف'
-                      : 'Admin Login'}
-                </span>
-              </button>
+              {isAuthenticatedAdmin && (
+                <button
+                  type="button"
+                  data-testid="admin-portal-btn"
+                  onClick={() => setActiveModule('admin_portal')}
+                  aria-label={isAr ? 'لوحة المشرف الخاصة' : 'Open Special Admin Dashboard'}
+                  className="inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-1.5 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 border-emerald-400 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-200"
+                >
+                  <Shield className="w-3.5 h-3.5 shrink-0" />
+                  <span className="hidden md:inline">
+                    {isAr ? 'لوحة المشرف' : 'Admin'}
+                  </span>
+                </button>
+              )}
 
               <button
                 type="button"
@@ -793,13 +867,6 @@ export default function App() {
                       {isAr ? 'فتح إعدادات النطاقات' : 'Authorize Domain'}
                     </a>
                   )}
-                  <button
-                    type="button"
-                    onClick={() => setActiveModule('admin_portal')}
-                    className="px-2.5 py-1 rounded border border-rose-300 dark:border-rose-800 bg-white dark:bg-slate-900 hover:bg-rose-100 dark:hover:bg-rose-900/40 whitespace-nowrap"
-                  >
-                    {isAr ? 'بوابة المشرف' : 'Admin Portal'}
-                  </button>
                   <button
                     type="button"
                     onClick={() => setAuthError(null)}
@@ -935,7 +1002,12 @@ export default function App() {
                 onServerAdminLoginSuccess={(token, subject, expiresAt) =>
                   setServerAdminSession({ token, subject, expiresAt })
                 }
-                onServerAdminLogout={() => setServerAdminSession(null)}
+                onServerAdminLogout={() => {
+                  setServerAdminSession(null);
+                  if (!isFirebaseAdmin) {
+                    exitAdminPortalToLab();
+                  }
+                }}
                 datasets={datasets}
                 samples={samples}
                 patterns={patterns}

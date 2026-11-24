@@ -75,8 +75,10 @@ import {
   TECHNOLOGY_STACK_INVENTORY,
 } from './deploymentReport';
 import {
+  canShowAdminNavEntry,
   computeExecutiveAdminSnapshot,
   formatFirebaseAuthErrorMessage,
+  isSpecialAdminUrlEntry,
 } from './adminDashboard';
 import {
   claimInitialAdminPasscode,
@@ -936,6 +938,16 @@ test('adminDashboard computes executive snapshot and formats unauthorized-domain
   );
   assert.equal(arGuidance.isUnauthorizedDomain, true);
   assert.ok(arGuidance.title.includes('Firebase'));
+
+  assert.equal(isSpecialAdminUrlEntry('', '', '/'), false);
+  assert.equal(isSpecialAdminUrlEntry('?portal=research', '#/dashboard', '/Textfzication/'), false);
+  assert.equal(isSpecialAdminUrlEntry('?portal=admin', '', '/Textfzication/'), true);
+  assert.equal(isSpecialAdminUrlEntry('?admin=1', '', '/'), true);
+  assert.equal(isSpecialAdminUrlEntry('', '#/admin', '/Textfzication/'), true);
+  assert.equal(isSpecialAdminUrlEntry('', '', '/admin'), true);
+
+  assert.equal(canShowAdminNavEntry(false), false);
+  assert.equal(canShowAdminNavEntry(true), true);
 });
 
 test('server adminAuth handles scrypt first-run passcode claim, verification, and Bearer token validation', () => {
